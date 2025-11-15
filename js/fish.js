@@ -56,18 +56,35 @@ class Fish {
         this.circlingDirection = Math.random() < 0.5 ? 1 : -1;
     }
 
-    resolve(otherFish, deltaTime, canvasWidth, canvasHeight) {
+    resolve(otherFish, deltaTime, canvasWidth, canvasHeight, playerControl = null, playerFish = null) {
         const headPos = this.spine.joints[0];
         this.noiseTime += deltaTime;
 
         const neighbors = [];
         const sameGroupNeighbors = [];
+        
+        // 玩家鱼吸引力
+        let playerAttractionForce = new Vec2(0, 0);
+        if (playerFish && !this.isPlayer) {
+            const playerHead = playerFish.spine.joints[0];
+            const dx = playerHead.x - headPos.x;
+            const dy = playerHead.y - headPos.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            
+            // 在较大范围内（800px）受到玩家吸引
+            if (dist < 800 && dist > 50) {
+                const dir = new Vec2(dx, dy).setMag(1);  // 归一化向量
+                const strength = Math.min(1.0, (800 - dist) / 800) * 0.5;
+                playerAttractionForce = dir.mult(this.maxForce * strength);
+            }
+        }
+        
         for (let other of otherFish) {
             if (other === this) continue;
             const dist = headPos.sub(other.spine.joints[0]).mag();
             if (dist < this.cohesionRadius) {
                 neighbors.push({ fish: other, distance: dist });
-                if (other.groupId === this.groupId) {
+                if (other.groupId === this.groupId || other.isPlayer) {
                     sameGroupNeighbors.push({ fish: other, distance: dist });
                 }
             }
@@ -95,33 +112,60 @@ class Fish {
             this.circlingCenter = center.mult(1 / (sameGroupNeighbors.length + 1));
         }
 
-        const separationForce = this.calculateSeparation(neighbors);
-        const alignmentForce = this.calculateAlignment(sameGroupNeighbors);
-        const cohesionForce = this.calculateCohesion(sameGroupNeighbors);
-        const noiseForce = this.calculateNoiseForce();
-        const circlingForce = this.calculateCircling();
-        const boundaryForce = this.calculateBoundaryAvoidance(headPos, canvasWidth, canvasHeight);
-
         let acceleration = new Vec2(0, 0);
-        acceleration = acceleration.add(separationForce.mult(this.separationWeight));
-        acceleration = acceleration.add(alignmentForce.mult(this.alignmentWeight));
-        acceleration = acceleration.add(cohesionForce.mult(this.cohesionWeight));
-        acceleration = acceleration.add(noiseForce.mult(this.noiseWeight));
-        acceleration = acceleration.add(circlingForce.mult(this.circlingWeight));
-        acceleration = acceleration.add(boundaryForce.mult(this.boundaryWeight));
+        
+        // 如果有玩家控制输入
+        if (playerControl && (playerControl.x !== 0 || playerControl.y !== 0)) {
+            // 玩家控制模式：强制朝向输入方向
+            const controlForce = new Vec2(playerControl.x, playerControl.y).mult(this.maxForce * 8);
+            acceleration = acceleration.add(controlForce);
+            
+            // 仍然保留分离力避免撞其他鱼
+            const separationForce = this.calculateSeparation(neighbors);
+            acceleration = acceleration.add(separationForce.mult(this.separationWeight * 0.5));
+            
+            // 仍然避开边界
+            const boundaryForce = this.calculateBoundaryAvoidance(headPos, canvasWidth, canvasHeight);
+            acceleration = acceleration.add(boundaryForce.mult(this.boundaryWeight));
+        } else {
+            // 自由运动模式
+            const separationForce = this.calculateSeparation(neighbors);
+            const alignmentForce = this.calculateAlignment(sameGroupNeighbors);
+            const cohesionForce = this.calculateCohesion(sameGroupNeighbors);
+            const noiseForce = this.calculateNoiseForce();
+            const circlingForce = this.calculateCircling();
+            const boundaryForce = this.calculateBoundaryAvoidance(headPos, canvasWidth, canvasHeight);
 
-        this.velocity = this.velocity.mult(0.99).add(acceleration);
+            acceleration = acceleration.add(separationForce.mult(this.separationWeight));
+            acceleration = acceleration.add(alignmentForce.mult(this.alignmentWeight));
+            acceleration = acceleration.add(cohesionForce.mult(this.cohesionWeight));
+            acceleration = acceleration.add(noiseForce.mult(this.noiseWeight));
+            acceleration = acceleration.add(circlingForce.mult(this.circlingWeight));
+            acceleration = acceleration.add(boundaryForce.mult(this.boundaryWeight));
+            
+            // 非玩家鱼受到玩家吸引
+            if (!this.isPlayer) {
+                acceleration = acceleration.add(playerAttractionForce);
+            }
+        }
 
+        // 应用阻尼和加速度
+        this.velocity = this.velocity.mult(0.98).add(acceleration);
+
+        // 速度限制
         const currentMaxSpeed = this.circlingTime > 0 ? this.maxSpeed * 0.8 : this.maxSpeed;
         if (this.velocity.mag() > currentMaxSpeed) {
             this.velocity = this.velocity.setMag(currentMaxSpeed);
         }
 
-        if (this.velocity.mag() < 0.3) {
-            this.velocity = this.velocity.setMag(0.3);
+        // 最小速度
+        if (this.velocity.mag() < 0.2) {
+            this.velocity = this.velocity.setMag(0.2);
         }
 
-        const newPos = headPos.add(this.velocity.mult(12));
+        // 使用合理的速度倍数（而不是固定的12）
+        const moveSpeed = 8.0;  // 降低移动速度
+        const newPos = headPos.add(this.velocity.mult(moveSpeed));
         const hardMargin = 30;
         newPos.x = Math.max(hardMargin, Math.min(canvasWidth - hardMargin, newPos.x));
         newPos.y = Math.max(hardMargin, Math.min(canvasHeight - hardMargin, newPos.y));
@@ -237,22 +281,46 @@ class Fish {
     calculateBoundaryAvoidance(pos, canvasWidth, canvasHeight) {
         let force = new Vec2(0, 0);
         const margin = this.boundaryMargin;
-        if (pos.x < margin) {
-            const strength = 1 - pos.x / margin;
-            force = force.add(new Vec2(strength * this.maxForce * 3, 0));
+        const softMargin = margin * 1.5; // 更大的缓冲区域
+        
+        // 左边界
+        if (pos.x < softMargin) {
+            const dist = pos.x;
+            const strength = Math.pow(1 - dist / softMargin, 2); // 平方衰减，更柔和
+            // 不直接推开，而是向右偏转
+            const pushForce = new Vec2(strength * this.maxForce * 1.5, 0);
+            // 添加切向力，让鱼沿边游
+            const tangentForce = new Vec2(0, (Math.random() - 0.5) * this.maxForce * 0.5);
+            force = force.add(pushForce).add(tangentForce);
         }
-        if (pos.x > canvasWidth - margin) {
-            const strength = 1 - (canvasWidth - pos.x) / margin;
-            force = force.add(new Vec2(-strength * this.maxForce * 3, 0));
+        
+        // 右边界
+        if (pos.x > canvasWidth - softMargin) {
+            const dist = canvasWidth - pos.x;
+            const strength = Math.pow(1 - dist / softMargin, 2);
+            const pushForce = new Vec2(-strength * this.maxForce * 1.5, 0);
+            const tangentForce = new Vec2(0, (Math.random() - 0.5) * this.maxForce * 0.5);
+            force = force.add(pushForce).add(tangentForce);
         }
-        if (pos.y < margin) {
-            const strength = 1 - pos.y / margin;
-            force = force.add(new Vec2(0, strength * this.maxForce * 3));
+        
+        // 上边界
+        if (pos.y < softMargin) {
+            const dist = pos.y;
+            const strength = Math.pow(1 - dist / softMargin, 2);
+            const pushForce = new Vec2(0, strength * this.maxForce * 1.5);
+            const tangentForce = new Vec2((Math.random() - 0.5) * this.maxForce * 0.5, 0);
+            force = force.add(pushForce).add(tangentForce);
         }
-        if (pos.y > canvasHeight - margin) {
-            const strength = 1 - (canvasHeight - pos.y) / margin;
-            force = force.add(new Vec2(0, -strength * this.maxForce * 3));
+        
+        // 下边界
+        if (pos.y > canvasHeight - softMargin) {
+            const dist = canvasHeight - pos.y;
+            const strength = Math.pow(1 - dist / softMargin, 2);
+            const pushForce = new Vec2(0, -strength * this.maxForce * 1.5);
+            const tangentForce = new Vec2((Math.random() - 0.5) * this.maxForce * 0.5, 0);
+            force = force.add(pushForce).add(tangentForce);
         }
+        
         return force;
     }
 
@@ -264,13 +332,14 @@ class Fish {
         return this.spine.joints[i].y + Math.sin(this.spine.angles[i] + angleOffset) * (this.bodyWidth[i] + lengthOffset);
     }
 
+    // 基于骨骼的采样（旧方法）
     sampleBodyPoints(step = 10) {
         const points = [];
         const joints = this.spine.joints;
         const angles = this.spine.angles;
-        const offsets = [-1, -0.5, 0, 0.5, 1];
+        const offsets = [-1, -0.8, -0.6, -0.4, -0.2, 0, 0.2, 0.4, 0.6, 0.8, 1];
 
-        for (let i = 0; i < joints.length - 1; i += 12 / step) {
+        for (let i = 0; i < joints.length - 1; i += 12 / (step * 2)) {
             const idx = Math.min(Math.floor(i), joints.length - 1);
             const joint = joints[idx];
             const normalAngle = (angles[idx] || 0) + Math.PI / 2;
@@ -283,6 +352,92 @@ class Fish {
             }
         }
 
+        return points;
+    }
+    
+    // 基于图像采样的方法（新方法）- 带颜色信息
+    sampleBodyPointsFromImage(offscreenCtx, sampleDensity = 2) {
+        const points = [];
+        
+        // 计算鱼的实际边界框 - 遍历所有关节点找出最大最小值
+        let minX = Infinity, minY = Infinity;
+        let maxX = -Infinity, maxY = -Infinity;
+        
+        for (let i = 0; i < this.spine.joints.length; i++) {
+            const joint = this.spine.joints[i];
+            const width = this.bodyWidth[Math.min(i, this.bodyWidth.length - 1)] || this.bodyWidth[this.bodyWidth.length - 1];
+            
+            // 考虑鱼体宽度
+            minX = Math.min(minX, joint.x - width);
+            minY = Math.min(minY, joint.y - width);
+            maxX = Math.max(maxX, joint.x + width);
+            maxY = Math.max(maxY, joint.y + width);
+        }
+        
+        // 添加额外的 padding 确保鳍和尾巴不被裁切
+        const padding = Math.max(...this.bodyWidth) * 3;
+        minX -= padding;
+        minY -= padding;
+        maxX += padding;
+        maxY += padding;
+        
+        const width = maxX - minX;
+        const height = maxY - minY;
+        
+        // 确保边界框不超出离屏 canvas
+        const safeWidth = Math.min(Math.ceil(width), offscreenCtx.canvas.width);
+        const safeHeight = Math.min(Math.ceil(height), offscreenCtx.canvas.height);
+        
+        // 清空离屏画布
+        offscreenCtx.clearRect(0, 0, offscreenCtx.canvas.width, offscreenCtx.canvas.height);
+        
+        // 临时保存 selected 状态并关闭（避免渲染选中圆圈）
+        const wasSelected = this.selected;
+        this.selected = false;
+        
+        // 在离屏画布上渲染鱼（使用相对坐标）
+        offscreenCtx.save();
+        offscreenCtx.translate(-minX, -minY);
+        this.display(offscreenCtx);
+        offscreenCtx.restore();
+        
+        // 恢复 selected 状态
+        this.selected = wasSelected;
+        
+        // 读取像素数据
+        const imageData = offscreenCtx.getImageData(0, 0, safeWidth, safeHeight);
+        const data = imageData.data;
+        
+        // 计算尾巴区域（后1/3是尾巴）
+        const tailStartX = width * 0.67;
+        
+        // 采样像素：每隔 sampleDensity 像素采样一次，带颜色信息
+        for (let y = 0; y < imageData.height; y += sampleDensity) {
+            for (let x = 0; x < imageData.width; x += sampleDensity) {
+                const idx = (y * imageData.width + x) * 4;
+                const r = data[idx + 0];
+                const g = data[idx + 1];
+                const b = data[idx + 2];
+                const alpha = data[idx + 3];
+                
+                // 如果像素不透明（alpha > 阈值），则作为采样点
+                if (alpha > 20) {
+                    // 判断是否是尾巴区域
+                    const isTail = x > tailStartX;
+                    // 计算在尾巴中的位置比例（0=尾根，1=尾尖）
+                    const tailProgress = isTail ? (x - tailStartX) / (width - tailStartX) : 0;
+                    
+                    points.push({
+                        x: minX + x,
+                        y: minY + y,
+                        color: [r / 255, g / 255, b / 255, alpha / 255],
+                        isTail: isTail,
+                        tailProgress: tailProgress  // 0-1，越靠近尾尖越大
+                    });
+                }
+            }
+        }
+        
         return points;
     }
 
