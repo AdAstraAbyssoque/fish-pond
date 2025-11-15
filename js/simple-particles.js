@@ -213,7 +213,7 @@ class SimpleReglParticles {
                     colors.push(p.color[0], p.color[1], p.color[2]);
                 }
             } else {
-                colors.push(1.0, 0.4, 0.2);  // 默认橙红色
+                colors.push(1.0, 0.4, 0.2);  // default orange-red
             }
         }
         
