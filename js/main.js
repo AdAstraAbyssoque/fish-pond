@@ -289,7 +289,7 @@ function bootstrap() {
         console.log('初始化粒子系统（视野自适应）...');
         particleSystem = new SimpleReglParticles(regl, {
             canvas: particleCanvas,
-            particleCount: 60000,     // 增加到 60000 以支持更多鱼
+            particleCount: 60000,     // Increased to 60000 to support more fish
             lifeSpan: 0.12,
             sizeRange: [1.5, 2.5],
             speedRange: [0.15, 0.8],
