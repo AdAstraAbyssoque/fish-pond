@@ -7,18 +7,45 @@
     <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-    <canvas id="canvas"></canvas>
+    <div id="canvas-wrapper">
+        <canvas id="canvas"></canvas>
+        <div id="overlay-root" aria-hidden="true"></div>
+    </div>
     <div id="info">
         <p>🐟 锦鲤池塘</p>
         <p>• 多群组自主游动系统</p>
         <p>• Perlin噪声驱动的优雅运动</p>
         <p>• 点击鱼儿进行选中</p>
+        <p>• 右上角滑块可调节鱼体缩放</p>
     </div>
 
+    <div id="controls" aria-label="池塘缩放调节">
+        <div class="control-row">
+            <label for="pondScaleControl">鱼体尺寸</label>
+            <span id="scaleValue">5%</span>
+        </div>
+        <input
+            type="range"
+            id="pondScaleControl"
+            min="0.05"
+            max="1.2"
+            step="0.01"
+            value="0.05"
+            aria-describedby="scaleValue"
+        >
+        <div class="control-actions">
+            <button id="scaleDown25" type="button">缩小25%</button>
+            <button id="scaleUp20" type="button">放大20%</button>
+        </div>
+        <button id="resetScale" type="button">重置默认尺寸</button>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.4.2/pixi.min.js" integrity="sha512-Gc8sH5FQzGdi95wvMObfWgxQz6a0N6gd5r68SuCc/q2jczFh+1FdeAiJhOIp95LcFKsnN51sQ4fVEccQVjSnfw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script src="js/utils.js"></script>
     <script src="js/noise.js"></script>
     <script src="js/chain.js"></script>
     <script src="js/fish.js"></script>
+    <script src="js/particleOverlay.js"></script>
     <script src="js/main.js"></script>
 </body>
 </html>
