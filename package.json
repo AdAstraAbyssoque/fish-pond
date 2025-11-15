@@ -1,0 +1,25 @@
+{
+  "name": "fish-pond",
+  "version": "1.0.0",
+  "description": "锦鲤池塘 - 基于 Regl GPGPU 的高性能粒子系统",
+  "main": "index.html",
+  "scripts": {
+    "serve": "npx serve -p 3000",
+    "dev": "npx serve -p 3000"
+  },
+  "keywords": [
+    "regl",
+    "gpgpu",
+    "particles",
+    "webgl",
+    "canvas"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "serve": "^14.2.1"
+  },
+  "dependencies": {
+    "regl": "^2.1.1"
+  }
+}

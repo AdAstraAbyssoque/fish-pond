@@ -9,14 +9,15 @@
 <body>
     <div id="canvas-wrapper">
         <canvas id="canvas"></canvas>
-        <div id="overlay-root" aria-hidden="true"></div>
+        <canvas id="particle-canvas"></canvas>
     </div>
     <div id="info">
-        <p>🐟 锦鲤池塘</p>
-        <p>• 多群组自主游动系统</p>
-        <p>• Perlin噪声驱动的优雅运动</p>
-        <p>• 点击鱼儿进行选中</p>
-        <p>• 右上角滑块可调节鱼体缩放</p>
+        <p>深夜池塘 - 大世界探索</p>
+        <p>• WASD 控制橙色锦鲤</p>
+        <p>• 2x2 大地图，20-24条鱼</p>
+        <p>• 鱼群跟随玩家游动</p>
+        <p>• 按 V 切换 Debug 视野模式</p>
+        <p>• Debug: 鼠标滚轮缩放视野</p>
     </div>
 
     <div id="controls" aria-label="池塘缩放调节">
@@ -40,12 +41,15 @@
         <button id="resetScale" type="button">重置默认尺寸</button>
     </div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/7.4.2/pixi.min.js" integrity="sha512-Gc8sH5FQzGdi95wvMObfWgxQz6a0N6gd5r68SuCc/q2jczFh+1FdeAiJhOIp95LcFKsnN51sQ4fVEccQVjSnfw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="node_modules/regl/dist/regl.min.js"></script>
     <script src="js/utils.js"></script>
     <script src="js/noise.js"></script>
     <script src="js/chain.js"></script>
+    <script src="js/keyboard.js"></script>
+    <script src="js/camera.js"></script>
+    <script src="js/landmarks.js"></script>
     <script src="js/fish.js"></script>
-    <script src="js/particleOverlay.js"></script>
+    <script src="js/simple-particles.js"></script>
     <script src="js/main.js"></script>
 </body>
 </html>
