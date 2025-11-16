@@ -3,11 +3,15 @@
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const particleCanvas = document.getElementById('particle-canvas');
+const overlayCanvas = document.getElementById('overlay-canvas');
+const overlayCtx = overlayCanvas.getContext('2d');
 
 canvas.width = window.innerWidth;
 canvas.height = window.innerHeight;
 particleCanvas.width = window.innerWidth;
 particleCanvas.height = window.innerHeight;
+overlayCanvas.width = window.innerWidth;
+overlayCanvas.height = window.innerHeight;
 
 // 创建 regl 实例
 const regl = createREGL({
@@ -25,6 +29,12 @@ window.addEventListener('resize', () => {
     canvas.height = window.innerHeight;
     particleCanvas.width = window.innerWidth;
     particleCanvas.height = window.innerHeight;
+    overlayCanvas.width = window.innerWidth;
+    overlayCanvas.height = window.innerHeight;
+    
+    // 更新摄像机的视野尺寸
+    camera.viewWidth = canvas.width;
+    camera.viewHeight = canvas.height;
     
     if (particleSystem) {
         particleSystem.canvas = particleCanvas;
@@ -34,7 +44,10 @@ window.addEventListener('resize', () => {
 // 创建鱼群
 const fishes = [];
 let particleSystem = null;
+let backgroundImage = null; // 池塘背景图片
+let lotusImage = null; // 荷叶遮罩图片
 let playerFish = null;  // 玩家控制的鱼
+let normalZoom = 1.0; // 正常模式下的缩放（会在图片加载后更新）
 
 // 创建离屏 canvas 用于图像采样（更大的尺寸）
 const offscreenCanvas = document.createElement('canvas');
@@ -46,11 +59,9 @@ const offscreenCtx = offscreenCanvas.getContext('2d', { willReadFrequently: true
 const camera = new Camera(canvas);
 const keyboard = new KeyboardController();
 
-// 地图配置
-const MAP_SIZE = 2;  // 2x2 地图
-const TILE_SIZE = canvas.width;  // 每个格子等于一个屏幕大小
-const WORLD_WIDTH = MAP_SIZE * TILE_SIZE;
-const WORLD_HEIGHT = MAP_SIZE * TILE_SIZE;
+// 地图配置（将在背景图片加载后更新）
+let WORLD_WIDTH = canvas.width * 2;  // 默认值，将在图片加载后更新
+let WORLD_HEIGHT = canvas.height * 2;  // 默认值，将在图片加载后更新
 
 // 地图参照物
 let landmarks = null;
@@ -179,21 +190,110 @@ function setupScaleControls() {
     }
 }
 
+// ===== 涟漪系统 =====
+class Ripple {
+    constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.radius = 0;
+        this.maxRadius = 150 + Math.random() * 100; // 150-250
+        this.speed = 120 + Math.random() * 80; // 120-200 像素/秒
+        this.alpha = 1.0;
+        this.lifespan = 2.0; // 生命周期（秒）
+        this.age = 0;
+    }
+    
+    update(deltaTime) {
+        this.age += deltaTime;
+        this.radius += this.speed * deltaTime;
+        // 淡出效果
+        this.alpha = Math.max(0, 1.0 - (this.age / this.lifespan));
+        return this.age < this.lifespan;
+    }
+    
+    render(ctx) {
+        if (this.alpha <= 0) return;
+        
+        ctx.save();
+        ctx.strokeStyle = `rgba(255, 255, 255, ${this.alpha * 0.4})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+    }
+}
+
+let activeRipples = [];
+const fishLastPositions = new Map();
+const RIPPLE_TRIGGER_DISTANCE = 300; // 每移动 300 像素可能触发一次涟漪
+const RIPPLE_TRIGGER_CHANCE = 0.08; // 8% 的概率触发
+
+function createRipple(x, y) {
+    activeRipples.push(new Ripple(x, y));
+}
+
+function updateRipples(deltaTime) {
+    activeRipples = activeRipples.filter(ripple => ripple.update(deltaTime));
+}
+
+function renderRipples(ctx, camera) {
+    for (const ripple of activeRipples) {
+        ripple.render(ctx);
+    }
+}
+
+function checkFishMovementForRipples(deltaTime) {
+    for (const fish of fishes) {
+        const head = fish.spine.joints[0];
+        const fishId = fishes.indexOf(fish);
+        
+        if (!fishLastPositions.has(fishId)) {
+            fishLastPositions.set(fishId, { x: head.x, y: head.y, distance: 0 });
+            continue;
+        }
+        
+        const lastData = fishLastPositions.get(fishId);
+        const dx = head.x - lastData.x;
+        const dy = head.y - lastData.y;
+        const movedDistance = Math.sqrt(dx * dx + dy * dy);
+        
+        lastData.distance += movedDistance;
+        
+        if (lastData.distance >= RIPPLE_TRIGGER_DISTANCE) {
+            if (Math.random() < RIPPLE_TRIGGER_CHANCE) {
+                createRipple(head.x, head.y);
+            }
+            lastData.distance = 0;
+        }
+        
+        lastData.x = head.x;
+        lastData.y = head.y;
+    }
+}
+
 function initPond() {
     fishes.length = 0;
     playerFish = null;
+    
+    // 重置涟漪系统
+    fishLastPositions.clear();
+    activeRipples = [];
 
-    // 在 2x2 大地图中创建约 20-24 条鱼
+    // 在地图中创建约 20-24 条鱼
     const fishCount = 20 + Math.floor(Math.random() * 5); // 20-24条
     const positions = [];
     
-    // 在 3x3 地图中生成均匀分布的群组中心
+    // 在地图中生成均匀分布的群组中心（使用 3x3 网格）
+    const gridSize = 3;
+    const tileWidth = WORLD_WIDTH / gridSize;
+    const tileHeight = WORLD_HEIGHT / gridSize;
     const groupCenters = [];
-    for (let gx = 0; gx < MAP_SIZE; gx++) {
-        for (let gy = 0; gy < MAP_SIZE; gy++) {
+    for (let gx = 0; gx < gridSize; gx++) {
+        for (let gy = 0; gy < gridSize; gy++) {
             groupCenters.push({
-                x: (gx + 0.5) * TILE_SIZE,
-                y: (gy + 0.5) * TILE_SIZE
+                x: (gx + 0.5) * tileWidth,
+                y: (gy + 0.5) * tileHeight
             });
         }
     }
@@ -210,7 +310,7 @@ function initPond() {
             const groupIndex = i % groupCenters.length;
             const center = groupCenters[groupIndex];
             const angle = Math.random() * Math.PI * 2;
-            const radius = Math.random() * (TILE_SIZE * 0.35);
+            const radius = Math.random() * (Math.min(tileWidth, tileHeight) * 0.35);
             
             const pos = {
                 x: center.x + Math.cos(angle) * radius,
@@ -252,7 +352,7 @@ function initPond() {
         fish.separationRadius = 130;
         fish.alignmentRadius = 180;
         fish.cohesionRadius = 220;
-        fish.maxSpeed = 0.6 + Math.random() * 0.3;
+        fish.maxSpeed = (0.6 + Math.random() * 0.3) * 0.67 * 0.5; // 速度减慢1/3后再减慢1/2
         fish.maxForce = 0.03;
         fish.separationWeight = 2.0;
         fish.alignmentWeight = 0.6;
@@ -270,7 +370,7 @@ function initPond() {
         }
     });
     
-    console.log('创建了', fishes.length, '条鱼，分布在', MAP_SIZE, 'x', MAP_SIZE, '大地图');
+    console.log('创建了', fishes.length, '条鱼，地图尺寸:', WORLD_WIDTH, 'x', WORLD_HEIGHT);
     console.log('玩家鱼:', playerFish ? '已创建' : '未找到');
 }
 
@@ -279,10 +379,57 @@ function bootstrap() {
     setupDebugControls();
     initPond();
     
+    // 加载池塘背景图片（底层）
+    if (!backgroundImage) {
+        console.log('加载池塘背景图片...');
+        backgroundImage = new Image();
+        backgroundImage.src = 'assets/pond2.PNG';
+        backgroundImage.onload = () => {
+            console.log('池塘背景图片加载完成，尺寸:', backgroundImage.width, 'x', backgroundImage.height);
+            // 更新地图尺寸为图片尺寸
+            WORLD_WIDTH = backgroundImage.width;
+            WORLD_HEIGHT = backgroundImage.height;
+            console.log('地图尺寸已更新为:', WORLD_WIDTH, 'x', WORLD_HEIGHT);
+            
+            // 调整摄像机初始缩放，让视角更大（只显示池塘约1/4区域）
+            const zoomX = canvas.width / WORLD_WIDTH;
+            const zoomY = canvas.height / WORLD_HEIGHT;
+            const fitZoom = Math.min(zoomX, zoomY); // 铺满屏幕的缩放
+            normalZoom = fitZoom * 2.0; // 放大2倍，显示约1/4池塘
+            camera.zoom = normalZoom;
+            camera.targetZoom = normalZoom;
+            console.log('正常缩放 (1/4池塘):', normalZoom.toFixed(3));
+            console.log('整个池塘缩放:', (fitZoom * 0.95).toFixed(3));
+            
+            // 重新初始化地图参照物（如果已存在）
+            if (landmarks) {
+                const mapSize = Math.ceil(Math.max(WORLD_WIDTH, WORLD_HEIGHT) / canvas.width);
+                landmarks = new Landmarks(WORLD_WIDTH, WORLD_HEIGHT, mapSize);
+            }
+        };
+        backgroundImage.onerror = () => {
+            console.error('池塘背景图片加载失败');
+        };
+    }
+    
+    // 加载荷叶遮罩图片（顶层）
+    if (!lotusImage) {
+        console.log('加载荷叶遮罩图片...');
+        lotusImage = new Image();
+        lotusImage.src = 'assets/lotus.PNG';
+        lotusImage.onload = () => {
+            console.log('荷叶遮罩图片加载完成，尺寸:', lotusImage.width, 'x', lotusImage.height);
+        };
+        lotusImage.onerror = () => {
+            console.error('荷叶遮罩图片加载失败');
+        };
+    }
+    
     // 初始化地图参照物
     if (!landmarks) {
         console.log('生成地图参照物...');
-        landmarks = new Landmarks(WORLD_WIDTH, WORLD_HEIGHT, MAP_SIZE);
+        const mapSize = Math.ceil(Math.max(WORLD_WIDTH, WORLD_HEIGHT) / canvas.width);
+        landmarks = new Landmarks(WORLD_WIDTH, WORLD_HEIGHT, mapSize);
     }
     
     if (!particleSystem) {
@@ -312,11 +459,15 @@ function setupDebugControls() {
             
             // 切换时调整粒子数
             if (debugMode) {
-                camera.setZoom(0.35);  // 缩小看到更大范围
+                // 计算能看到整个池塘的缩放
+                const fitZoom = Math.min(canvas.width / WORLD_WIDTH, canvas.height / WORLD_HEIGHT) * 0.95;
+                camera.setZoom(fitZoom);  // 显示整个池塘
                 debugParticleReduction = 0.3;  // 减少到 30% 粒子
+                console.log('Debug模式：显示整个池塘，zoom:', fitZoom.toFixed(3));
             } else {
-                camera.setZoom(1.0);
+                camera.setZoom(normalZoom);  // 恢复到正常缩放（显示约1/4池塘）
                 debugParticleReduction = 1.0;
+                console.log('正常模式：显示1/4池塘，zoom:', normalZoom.toFixed(3));
             }
         }
     });
@@ -448,7 +599,8 @@ function animate(currentTime) {
     
     // ===== 3. 摄像机跟随玩家鱼 =====
     if (playerFish) {
-        camera.follow(playerFish.spine.joints[0], 0.08);
+        // 使用更高的平滑度，让摄像机更快地跟随到中心
+        camera.follow(playerFish.spine.joints[0], 0.15);
     }
     camera.update();
     
@@ -458,43 +610,47 @@ function animate(currentTime) {
         return camera.isInView(head.x, head.y, 300);
     });
     
+    // ===== 4.5. 检测鱼的位置变化并触发涟漪 =====
+    checkFishMovementForRipples(deltaTime);
+    
+    // ===== 4.6. 更新涟漪系统 =====
+    updateRipples(deltaTime);
+    
     // ===== 5. 渲染背景（屏幕坐标） =====
-    ctx.fillStyle = '#0a0f17';
+    // 先清除 canvas
+    ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     
-    const gradient = ctx.createRadialGradient(
-        canvas.width / 2, canvas.height * 0.4, 0,
-        canvas.width / 2, canvas.height * 0.4, Math.max(canvas.width, canvas.height) * 0.9
-    );
-    gradient.addColorStop(0, '#1a2332');
-    gradient.addColorStop(0.5, '#0f1821');
-    gradient.addColorStop(1, '#0a0f17');
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    
-    // 月光倒影
-    const moonGlow = ctx.createRadialGradient(
-        canvas.width * 0.5, canvas.height * 0.3, 0,
-        canvas.width * 0.5, canvas.height * 0.3, 400
-    );
-    moonGlow.addColorStop(0, 'rgba(180, 200, 230, 0.08)');
-    moonGlow.addColorStop(0.5, 'rgba(120, 150, 200, 0.04)');
-    moonGlow.addColorStop(1, 'rgba(80, 120, 180, 0)');
-    ctx.fillStyle = moonGlow;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    
-    // 水波纹理
-    drawWaterRipples(ctx, currentTime);
-    drawPondShadows(ctx);
-    drawPondBorders(ctx);
+    // 渲染池塘背景图片（固定在世界坐标，跟随缩放但不跟随平移）
+    if (backgroundImage && backgroundImage.complete) {
+        ctx.save();
+        
+        // 背景固定在世界坐标 (0, 0) 到 (WORLD_WIDTH, WORLD_HEIGHT)
+        // 使用 worldToScreen 转换，这样背景会固定在世界坐标中，跟随缩放
+        const topLeftScreen = camera.worldToScreen(0, 0);
+        const bottomRightScreen = camera.worldToScreen(WORLD_WIDTH, WORLD_HEIGHT);
+        
+        const screenX = topLeftScreen.x;
+        const screenY = topLeftScreen.y;
+        const screenWidth = bottomRightScreen.x - topLeftScreen.x;
+        const screenHeight = bottomRightScreen.y - topLeftScreen.y;
+        
+        // 绘制背景图片
+        ctx.drawImage(backgroundImage, screenX, screenY, screenWidth, screenHeight);
+        
+        ctx.restore();
+    }
     
     // ===== 6. 应用摄像机变换并渲染世界 =====
     camera.applyTransform(ctx);
     
-    // 渲染地图参照物
-    if (landmarks) {
-        landmarks.render(ctx, camera, currentTime);
-    }
+    // 渲染涟漪（在世界坐标中，只在池塘范围内）
+    renderRipples(ctx, camera);
+    
+    // 不渲染地图参照物，保持池塘外纯黑
+    // if (landmarks) {
+    //     landmarks.render(ctx, camera, currentTime);
+    // }
     
     // （可选）渲染鱼的实体
     // for (let fish of visibleFishes) {
@@ -507,18 +663,20 @@ function animate(currentTime) {
         ctx.lineWidth = 3;
         ctx.strokeRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
         
-        // 绘制网格
+        // 绘制网格（每 1000 像素一条线）
         ctx.strokeStyle = 'rgba(100, 100, 255, 0.2)';
         ctx.lineWidth = 1;
-        for (let i = 1; i < MAP_SIZE; i++) {
+        const gridSpacing = 1000;
+        for (let i = gridSpacing; i < WORLD_WIDTH; i += gridSpacing) {
             ctx.beginPath();
-            ctx.moveTo(i * TILE_SIZE, 0);
-            ctx.lineTo(i * TILE_SIZE, WORLD_HEIGHT);
+            ctx.moveTo(i, 0);
+            ctx.lineTo(i, WORLD_HEIGHT);
             ctx.stroke();
-            
+        }
+        for (let i = gridSpacing; i < WORLD_HEIGHT; i += gridSpacing) {
             ctx.beginPath();
-            ctx.moveTo(0, i * TILE_SIZE);
-            ctx.lineTo(WORLD_WIDTH, i * TILE_SIZE);
+            ctx.moveTo(0, i);
+            ctx.lineTo(WORLD_WIDTH, i);
             ctx.stroke();
         }
     }
@@ -573,6 +731,29 @@ function animate(currentTime) {
         
         regl.clear({ color: [0, 0, 0, 0], depth: 1 });
         particleSystem.render(projection);
+    }
+    
+    // ===== 7.5. 渲染荷叶遮罩（顶层 overlay canvas，固定在世界坐标，遮挡鱼） =====
+    // 先清除 overlay canvas
+    overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+    
+    if (lotusImage && lotusImage.complete) {
+        overlayCtx.save();
+        
+        // 荷叶固定在世界坐标 (0, 0) 到 (WORLD_WIDTH, WORLD_HEIGHT)
+        // 使用 worldToScreen 转换，和背景图片一样的行为
+        const topLeftScreen = camera.worldToScreen(0, 0);
+        const bottomRightScreen = camera.worldToScreen(WORLD_WIDTH, WORLD_HEIGHT);
+        
+        const screenX = topLeftScreen.x;
+        const screenY = topLeftScreen.y;
+        const screenWidth = bottomRightScreen.x - topLeftScreen.x;
+        const screenHeight = bottomRightScreen.y - topLeftScreen.y;
+        
+        // 绘制荷叶遮罩图片（PNG 透明图片）
+        overlayCtx.drawImage(lotusImage, screenX, screenY, screenWidth, screenHeight);
+        
+        overlayCtx.restore();
     }
     
     // ===== 8. 屏幕空间 UI =====

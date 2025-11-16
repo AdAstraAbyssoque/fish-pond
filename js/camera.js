@@ -20,8 +20,10 @@ class Camera {
     
     // 跟随目标（平滑）
     follow(target, smoothness = 0.1) {
-        const targetX = target.x - this.viewWidth / 2;
-        const targetY = target.y - this.viewHeight / 2;
+        // 计算让目标在屏幕中心的摄像机位置
+        // 考虑缩放：屏幕中心在世界坐标中的偏移 = (viewWidth/2) / zoom
+        const targetX = target.x - (this.viewWidth / 2) / this.zoom;
+        const targetY = target.y - (this.viewHeight / 2) / this.zoom;
         
         this.x += (targetX - this.x) * smoothness;
         this.y += (targetY - this.y) * smoothness;
