@@ -46,6 +46,8 @@ const fishes = [];
 let particleSystem = null;
 let backgroundImage = null; // 池塘背景图片
 let lotusImage = null; // 荷叶遮罩图片
+let collisionMaskImage = null; // 碰撞遮罩图片
+let collisionMaskData = null; // 碰撞遮罩的像素数据
 let playerFish = null;  // 玩家控制的鱼
 let normalZoom = 1.0; // 正常模式下的缩放（会在图片加载后更新）
 
@@ -54,6 +56,10 @@ const offscreenCanvas = document.createElement('canvas');
 offscreenCanvas.width = 3000;
 offscreenCanvas.height = 3000;
 const offscreenCtx = offscreenCanvas.getContext('2d', { willReadFrequently: true });
+
+// 创建离屏 canvas 用于碰撞检测遮罩
+const collisionCanvas = document.createElement('canvas');
+const collisionCtx = collisionCanvas.getContext('2d', { willReadFrequently: true });
 
 // 创建摄像机和键盘控制
 const camera = new Camera(canvas);
@@ -75,6 +81,91 @@ const SCALE_RANGE = { min: 0.05, max: 1.2, default: 0.05 };
 
 function clampScale(value) {
     return Math.min(SCALE_RANGE.max, Math.max(SCALE_RANGE.min, value));
+}
+
+// ============= 碰撞检测系统 =============
+
+// 检查某个位置是否可以通过（亮色区域为可通过，深色为不可通过）
+function isPositionWalkable(x, y) {
+    if (!collisionMaskData || !collisionMaskImage) {
+        return true; // 如果没有碰撞遮罩，默认可通过
+    }
+    
+    // 边界检查
+    if (x < 0 || y < 0 || x >= WORLD_WIDTH || y >= WORLD_HEIGHT) {
+        return false;
+    }
+    
+    // 转换到图片坐标
+    const imgX = Math.floor(x);
+    const imgY = Math.floor(y);
+    
+    // 边界检查（防止越界）
+    if (imgX < 0 || imgY < 0 || imgX >= collisionMaskImage.width || imgY >= collisionMaskImage.height) {
+        return false;
+    }
+    
+    // 计算像素索引（RGBA格式）
+    const index = (imgY * collisionMaskImage.width + imgX) * 4;
+    
+    // 获取 RGB 值
+    const r = collisionMaskData.data[index];
+    const g = collisionMaskData.data[index + 1];
+    const b = collisionMaskData.data[index + 2];
+    
+    // 计算亮度（luminance）：亮色（白色/浅色）= 池塘可通过，深色 = 岸边不可通过
+    const brightness = (r * 0.299 + g * 0.587 + b * 0.114);
+    
+    // 亮度 > 200 认为是可通过区域（池塘），否则是岸边
+    return brightness > 200;
+}
+
+// 暴露到全局作用域，供 Fish 类使用
+window.isPositionWalkable = isPositionWalkable;
+
+// 加载碰撞遮罩并提取像素数据
+function loadCollisionMask(imageSrc, callback) {
+    collisionMaskImage = new Image();
+    collisionMaskImage.src = imageSrc;
+    
+    collisionMaskImage.onload = () => {
+        console.log('碰撞遮罩加载完成，尺寸:', collisionMaskImage.width, 'x', collisionMaskImage.height);
+        
+        // 设置碰撞 canvas 尺寸
+        collisionCanvas.width = collisionMaskImage.width;
+        collisionCanvas.height = collisionMaskImage.height;
+        
+        // 绘制图片到离屏 canvas
+        collisionCtx.clearRect(0, 0, collisionCanvas.width, collisionCanvas.height);
+        collisionCtx.drawImage(collisionMaskImage, 0, 0);
+        
+        // 提取像素数据
+        collisionMaskData = collisionCtx.getImageData(0, 0, collisionCanvas.width, collisionCanvas.height);
+        console.log('碰撞遮罩像素数据已提取');
+        
+        // 测试几个点的亮度值
+        const testPoints = [
+            { x: Math.floor(collisionCanvas.width / 2), y: Math.floor(collisionCanvas.height / 2), desc: '中心' },
+            { x: 50, y: 50, desc: '左上角' },
+            { x: collisionCanvas.width - 50, y: 50, desc: '右上角' },
+            { x: 200, y: 200, desc: '测试点1' },
+        ];
+        console.log('碰撞遮罩采样测试:');
+        for (let point of testPoints) {
+            const idx = (point.y * collisionCanvas.width + point.x) * 4;
+            const r = collisionMaskData.data[idx];
+            const g = collisionMaskData.data[idx + 1];
+            const b = collisionMaskData.data[idx + 2];
+            const brightness = (r * 0.299 + g * 0.587 + b * 0.114);
+            console.log(`  ${point.desc} (${point.x}, ${point.y}): RGB(${r},${g},${b}), 亮度=${brightness.toFixed(1)}, 可通过=${brightness > 200}`);
+        }
+        
+        if (callback) callback();
+    };
+    
+    collisionMaskImage.onerror = () => {
+        console.error('碰撞遮罩加载失败');
+    };
 }
 
 function readStoredScale() {
@@ -322,6 +413,11 @@ function initPond() {
             pos.x = Math.max(margin, Math.min(WORLD_WIDTH - margin, pos.x));
             pos.y = Math.max(margin, Math.min(WORLD_HEIGHT - margin, pos.y));
             
+            // 检查是否在可通行区域（碰撞检测）
+            if (window.isPositionWalkable && !window.isPositionWalkable(pos.x, pos.y)) {
+                continue; // 不在可通行区域，跳过
+            }
+            
             // 检查与其他鱼的距离
             let valid = true;
             for (let existing of positions) {
@@ -424,6 +520,12 @@ function bootstrap() {
             console.error('荷叶遮罩图片加载失败');
         };
     }
+    
+    // 加载碰撞遮罩图片
+    console.log('加载碰撞遮罩...');
+    loadCollisionMask('assets/riverbank2.PNG', () => {
+        console.log('碰撞检测系统已就绪');
+    });
     
     // 初始化地图参照物
     if (!landmarks) {
