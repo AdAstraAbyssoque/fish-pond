@@ -100,7 +100,7 @@ let debugMode = false;
 let debugParticleReduction = 1.0;  // 粒子数量倍率
 
 const SCALE_STORAGE_KEY = 'pondScaleRatio';
-const SCALE_RANGE = { min: 0.05, max: 1.2, default: 0.16 };
+const SCALE_RANGE = { min: 0.05, max: 1.2, default: 0.6 };  // 更大的鱼（60%）
 
 // 粒子与生态模型的基础参数
 const BASE_PARTICLE_SPAWN_RATE = 28000;
@@ -231,7 +231,13 @@ class PondHomeostasis {
     }
 }
 
-// 模拟一个“Python 后端”源源推送四维加速度（x, y, z, a）
+// ============= 加速度数据流 =============
+
+// 配置：使用真实传感器还是模拟数据
+const USE_REAL_SENSOR = true;  // 改为 false 使用模拟数据
+const WEBSOCKET_URL = 'ws://localhost:8765';
+
+// 模拟一个"Python 后端"源源推送四维加速度（x, y, z, a）
 function createMockAccelerometerStream() {
     const listeners = [];
     const phases = [
@@ -284,6 +290,123 @@ function createMockAccelerometerStream() {
             clearInterval(timer);
         }
     };
+}
+
+// 真实传感器数据流（通过 WebSocket 连接 Python 后端）
+function createRealAccelerometerStream() {
+    const listeners = [];
+    let lastVector = { x: 0, y: 0, z: 0, a: 0, magnitude: 0, phase: '静水' };
+    let ws = null;
+    let reconnectTimer = null;
+    let isConnected = false;
+
+    const connect = () => {
+        console.log(`正在连接传感器服务器: ${WEBSOCKET_URL}`);
+        
+        try {
+            ws = new WebSocket(WEBSOCKET_URL);
+            
+            ws.onopen = () => {
+                console.log('✅ 传感器已连接');
+                isConnected = true;
+                
+                // 显示连接状态
+                const statusDiv = document.getElementById('sensor-status');
+                if (statusDiv) {
+                    statusDiv.textContent = '🟢 传感器已连接';
+                    statusDiv.style.color = '#00ff00';
+                }
+            };
+            
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    
+                    // 将传感器数据映射到我们的格式
+                    lastVector = {
+                        x: data.x || 0,
+                        y: data.y || 0,
+                        z: data.z || 0,
+                        a: data.a || 0,
+                        magnitude: data.magnitude || 0,
+                        phase: data.phase || '静水',
+                        // 保留额外的传感器数据
+                        AngX: data.AngX,
+                        AngY: data.AngY,
+                        AngZ: data.AngZ
+                    };
+                    
+                    // 通知所有监听器
+                    listeners.forEach(cb => cb(lastVector));
+                    
+                } catch (error) {
+                    console.error('解析传感器数据失败:', error);
+                }
+            };
+            
+            ws.onerror = (error) => {
+                console.error('❌ WebSocket 错误:', error);
+                isConnected = false;
+            };
+            
+            ws.onclose = () => {
+                console.log('🔴 传感器连接已断开');
+                isConnected = false;
+                
+                const statusDiv = document.getElementById('sensor-status');
+                if (statusDiv) {
+                    statusDiv.textContent = '🔴 传感器已断开，尝试重连...';
+                    statusDiv.style.color = '#ff9900';
+                }
+                
+                // 5秒后尝试重连
+                reconnectTimer = setTimeout(() => {
+                    console.log('尝试重新连接传感器...');
+                    connect();
+                }, 5000);
+            };
+            
+        } catch (error) {
+            console.error('创建 WebSocket 连接失败:', error);
+            
+            // 5秒后尝试重连
+            reconnectTimer = setTimeout(connect, 5000);
+        }
+    };
+    
+    // 立即连接
+    connect();
+    
+    return {
+        onData(callback) {
+            listeners.push(callback);
+        },
+        getLatest() {
+            return lastVector;
+        },
+        isConnected() {
+            return isConnected;
+        },
+        stop() {
+            if (reconnectTimer) {
+                clearTimeout(reconnectTimer);
+            }
+            if (ws) {
+                ws.close();
+            }
+        }
+    };
+}
+
+// 工厂函数：根据配置创建数据流
+function createAccelerometerStream() {
+    if (USE_REAL_SENSOR) {
+        console.log('🔧 使用真实传感器数据');
+        return createRealAccelerometerStream();
+    } else {
+        console.log('🔧 使用模拟传感器数据');
+        return createMockAccelerometerStream();
+    }
 }
 
 // 立即创建一个稳态模型，等 bootstrap 后绑定模拟数据流
@@ -766,11 +889,12 @@ function bootstrap() {
     setupEcosystemPanel();
     
     if (!sensorStream) {
-        sensorStream = createMockAccelerometerStream();
+        sensorStream = createAccelerometerStream();  // 使用工厂函数，根据配置选择真实/模拟数据
         sensorStream.onData((vector) => {
             homeostasis.receiveSensor(vector);
         });
         homeostasis.receiveSensor(sensorStream.getLatest());
+        console.log('✅ 加速度数据流已启动');
     }
     
     // 加载池塘背景图片（底层）

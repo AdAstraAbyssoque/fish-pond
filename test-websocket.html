@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>WebSocket 测试</title>
+    <style>
+        body {
+            font-family: monospace;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #00ff00;
+        }
+        #status {
+            font-size: 24px;
+            margin: 20px 0;
+            padding: 10px;
+            border: 2px solid #00ff00;
+        }
+        #data {
+            background: #000;
+            padding: 10px;
+            margin-top: 20px;
+            border: 1px solid #333;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .connected { color: #00ff00; }
+        .disconnected { color: #ff0000; }
+        .connecting { color: #ffaa00; }
+    </style>
+</head>
+<body>
+    <h1>WebSocket 传感器连接测试</h1>
+    <div id="status" class="connecting">⏳ 正在连接...</div>
+    <button onclick="reconnect()">重新连接</button>
+    <button onclick="clearLog()">清空日志</button>
+    
+    <h3>实时数据：</h3>
+    <div id="data"></div>
+
+    <script>
+        const WEBSOCKET_URL = 'ws://localhost:8765';
+        let ws = null;
+        let dataDiv = document.getElementById('data');
+        let statusDiv = document.getElementById('status');
+        
+        function log(message, color = '#00ff00') {
+            const line = document.createElement('div');
+            line.style.color = color;
+            line.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            dataDiv.insertBefore(line, dataDiv.firstChild);
+            
+            // 限制最多显示 50 条
+            if (dataDiv.children.length > 50) {
+                dataDiv.removeChild(dataDiv.lastChild);
+            }
+        }
+        
+        function connect() {
+            log('正在连接到 ' + WEBSOCKET_URL, '#ffaa00');
+            statusDiv.textContent = '⏳ 正在连接...';
+            statusDiv.className = 'connecting';
+            
+            try {
+                ws = new WebSocket(WEBSOCKET_URL);
+                
+                ws.onopen = () => {
+                    log('✅ WebSocket 连接成功！', '#00ff00');
+                    statusDiv.textContent = '🟢 已连接';
+                    statusDiv.className = 'connected';
+                };
+                
+                ws.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        const msg = `AccX: ${data.x?.toFixed(3)}, AccY: ${data.y?.toFixed(3)}, AccZ: ${data.z?.toFixed(3)} | 强度: ${data.magnitude?.toFixed(3)}g | 状态: ${data.phase}`;
+                        log(msg, '#00ddff');
+                    } catch (error) {
+                        log('❌ 解析数据失败: ' + error.message, '#ff0000');
+                    }
+                };
+                
+                ws.onerror = (error) => {
+                    log('❌ WebSocket 错误: ' + error, '#ff0000');
+                    statusDiv.textContent = '🔴 连接错误';
+                    statusDiv.className = 'disconnected';
+                };
+                
+                ws.onclose = () => {
+                    log('🔴 WebSocket 连接已关闭', '#ff9900');
+                    statusDiv.textContent = '🔴 已断开';
+                    statusDiv.className = 'disconnected';
+                    
+                    // 5秒后自动重连
+                    setTimeout(() => {
+                        log('尝试重新连接...', '#ffaa00');
+                        connect();
+                    }, 5000);
+                };
+                
+            } catch (error) {
+                log('❌ 创建连接失败: ' + error.message, '#ff0000');
+                statusDiv.textContent = '🔴 连接失败';
+                statusDiv.className = 'disconnected';
+            }
+        }
+        
+        function reconnect() {
+            if (ws) {
+                ws.close();
+            }
+            setTimeout(connect, 100);
+        }
+        
+        function clearLog() {
+            dataDiv.innerHTML = '';
+        }
+        
+        // 页面加载时自动连接
+        connect();
+    </script>
+</body>
+</html>
+

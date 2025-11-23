@@ -19,13 +19,13 @@
         <p>• 鱼群跟随玩家游动</p>
         <p>• 按 V 切换 Debug 视野模式</p>
         <p>• Debug: 鼠标滚轮缩放视野</p>
-        <p>• Mock 加速度输入驱动生态稳态/鱼群粒子</p>
+        <p id="sensor-status" style="margin-top: 8px; font-weight: bold;">⚡ 加速度传感器：初始化中...</p>
     </div>
 
     <div id="controls" aria-label="池塘缩放调节">
         <div class="control-row">
             <label for="pondScaleControl">鱼体尺寸</label>
-            <span id="scaleValue">5%</span>
+            <span id="scaleValue">60%</span>
         </div>
         <input
             type="range"
@@ -33,7 +33,7 @@
             min="0.05"
             max="1.2"
             step="0.01"
-            value="0.05"
+            value="0.6"
             aria-describedby="scaleValue"
         >
         <div class="control-actions">
