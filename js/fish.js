@@ -651,19 +651,7 @@ class Fish {
         ctx.fill();
         ctx.stroke();
 
-        // 眼睛
-        ctx.fillStyle = 'rgba(40, 40, 50, 0.9)';
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-        ctx.lineWidth = Math.max(0.5, 1 * s);
-        const eyeRadius = Math.max(2, 5 * s);
-        ctx.beginPath();
-        ctx.arc(this.getPosX(0, Math.PI / 2, -11 * s), this.getPosY(0, Math.PI / 2, -11 * s), eyeRadius, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(this.getPosX(0, -Math.PI / 2, -11 * s), this.getPosY(0, -Math.PI / 2, -11 * s), eyeRadius, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
+        // 眼睛 - 已移除
     }
 
     containsPoint(x, y) {
