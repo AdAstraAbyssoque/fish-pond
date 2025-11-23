@@ -50,6 +50,7 @@ let collisionMaskImage = null; // 碰撞遮罩图片
 let collisionMaskData = null; // 碰撞遮罩的像素数据
 let playerFish = null;  // 玩家控制的鱼
 let normalZoom = 1.0; // 正常模式下的缩放（会在图片加载后更新）
+const ecosystemUI = {};
 
 // 创建离屏 canvas 用于图像采样（更大的尺寸）
 const offscreenCanvas = document.createElement('canvas');
@@ -79,9 +80,171 @@ let debugParticleReduction = 1.0;  // 粒子数量倍率
 const SCALE_STORAGE_KEY = 'pondScaleRatio';
 const SCALE_RANGE = { min: 0.05, max: 1.2, default: 0.16 };
 
+// 粒子与生态模型的基础参数
+const BASE_PARTICLE_SPAWN_RATE = 28000;
+
+// 生态稳态/传感器状态
+let homeostasis = null;
+let sensorStream = null;
+let lastEcosystemSnapshot = null;
+
 function clampScale(value) {
     return Math.min(SCALE_RANGE.max, Math.max(SCALE_RANGE.min, value));
 }
+
+function clamp01(value) {
+    return Math.max(0, Math.min(1, value));
+}
+
+function damp(current, target, speed, deltaTime) {
+    const t = 1 - Math.exp(-speed * deltaTime);
+    return current + (target - current) * t;
+}
+
+function randomRange(min, max) {
+    return min + Math.random() * (max - min);
+}
+
+function randomUnitVector3() {
+    const theta = Math.random() * Math.PI * 2;
+    const z = Math.random() * 2 - 1;
+    const r = Math.sqrt(Math.max(0, 1 - z * z));
+    return {
+        x: Math.cos(theta) * r,
+        y: Math.sin(theta) * r,
+        z
+    };
+}
+
+// 生态稳态模型：把传感器的加速度映射为池塘“压力”和“健康度”
+class PondHomeostasis {
+    constructor() {
+        this.sensor = { x: 0, y: 0, z: 0, a: 0, magnitude: 0, phase: '静水' };
+        this.panic = 0;       // 瞬时动荡度
+        this.stability = 1;   // 系统稳态（目标靠近1）
+        this.health = 1;      // 鱼群健康/活力
+        this.capacity = 1;    // 池塘承载力（掉下去后不完全恢复）
+        this.collapseDebt = 0;
+    }
+
+    receiveSensor(vector) {
+        this.sensor = { ...vector };
+    }
+
+    step(deltaTime) {
+        const magnitude = Math.sqrt(
+            this.sensor.x * this.sensor.x +
+            this.sensor.y * this.sensor.y +
+            this.sensor.z * this.sensor.z
+        );
+        const jerk = Math.abs(this.sensor.a);
+
+        // 将加速度映射为动荡度，a 维度提供额外“突发”权重
+        const agitation = clamp01(magnitude * 0.045 + jerk * 0.18);
+        this.panic = damp(this.panic, agitation, 3.4, deltaTime);
+
+        // 稳态越高，恢复力越强；动荡越高，稳态越低
+        const stabilityTarget = clamp01(1 - this.panic * 0.9 + this.capacity * 0.12);
+        this.stability = damp(this.stability, stabilityTarget, 2.2, deltaTime);
+
+        // 恢复与伤害，结合稳态与动荡
+        const damage = (0.36 + this.collapseDebt * 0.65) * Math.pow(this.panic, 1.25);
+        const recovery = Math.max(0, this.stability - this.health) *
+            (0.55 * this.capacity) *
+            (1 - this.panic * 0.75);
+        this.health = clamp01(this.health + (recovery - damage) * deltaTime);
+
+        // 低于阈值后触发不可逆的承载力衰减
+        if (this.health < 0.24) {
+            this.collapseDebt = clamp01(this.collapseDebt + (0.11 + this.panic * 0.45) * deltaTime);
+            this.capacity = Math.max(0.32, 1 - this.collapseDebt);
+        }
+
+        const fishIntegrity = clamp01(this.health * this.capacity * (1 - this.panic * 0.25));
+        const particleMultiplier = clamp01(0.28 + fishIntegrity * 0.9);
+
+        return {
+            sensor: this.sensor,
+            panic: this.panic,
+            instability: agitation,
+            stability: this.stability,
+            health: this.health,
+            capacity: this.capacity,
+            irreversible: this.capacity < 0.99,
+            fishIntegrity,
+            particleMultiplier
+        };
+    }
+
+    getFishIntegrity(offset = 0) {
+        const base = clamp01(this.health * this.capacity * (1 - this.panic * 0.3));
+        return clamp01(base * (1 + offset));
+    }
+
+    getParticleMultiplier() {
+        const base = clamp01(this.health * this.capacity);
+        const panicLoss = 0.25 + this.panic * 0.55;
+        return clamp01(0.25 + base * (1 - panicLoss * 0.6));
+    }
+}
+
+// 模拟一个“Python 后端”源源推送四维加速度（x, y, z, a）
+function createMockAccelerometerStream() {
+    const listeners = [];
+    const phases = [
+        { name: '静水', base: 0.8, spread: 1.1, jerk: [0.05, 0.3], duration: [4, 7] },
+        { name: '微扰', base: 3.4, spread: 2.8, jerk: [0.3, 1.2], duration: [5, 9] },
+        { name: '惊扰', base: 9.6, spread: 7.2, jerk: [1.1, 3.6], duration: [2.5, 4.5] }
+    ];
+    let currentPhase = { ...phases[0], remaining: randomRange(phases[0].duration[0], phases[0].duration[1]) };
+    let lastVector = { x: 0, y: 0, z: 0, a: 0, magnitude: 0, phase: currentPhase.name };
+    const intervalMs = 320;
+
+    const pickPhase = (lastName) => {
+        const candidates = phases.filter(p => p.name !== lastName || Math.random() < 0.35);
+        const next = candidates[Math.floor(Math.random() * candidates.length)];
+        return { ...next, remaining: randomRange(next.duration[0], next.duration[1]) };
+    };
+
+    const tick = () => {
+        currentPhase.remaining -= intervalMs / 1000;
+        if (currentPhase.remaining <= 0) {
+            currentPhase = pickPhase(currentPhase.name);
+        }
+
+        const dir = randomUnitVector3();
+        const magnitude = Math.max(0, currentPhase.base + (Math.random() - 0.5) * currentPhase.spread * 2);
+        const jerk = randomRange(currentPhase.jerk[0], currentPhase.jerk[1]) * (Math.random() < 0.18 ? 2.4 : 1);
+
+        lastVector = {
+            x: dir.x * magnitude + randomRange(-0.6, 0.6),
+            y: dir.y * magnitude + randomRange(-0.6, 0.6),
+            z: dir.z * magnitude + randomRange(-0.6, 0.6),
+            a: jerk,
+            magnitude,
+            phase: currentPhase.name
+        };
+
+        listeners.forEach(cb => cb(lastVector));
+    };
+
+    const timer = setInterval(tick, intervalMs);
+
+    return {
+        onData(callback) {
+            listeners.push(callback);
+        },
+        getLatest() {
+            return lastVector;
+        },
+        stop() {
+            clearInterval(timer);
+        }
+    };
+}
+
+// 立即创建一个稳态模型，等 bootstrap 后绑定模拟数据流
+homeostasis = new PondHomeostasis();
 
 // ============= 碰撞检测系统 =============
 
@@ -281,6 +444,68 @@ function setupScaleControls() {
     }
 }
 
+function setupEcosystemPanel() {
+    ecosystemUI.panel = document.getElementById('eco-panel');
+    ecosystemUI.vector = document.getElementById('sensorVector');
+    ecosystemUI.phase = document.getElementById('sensorPhase');
+    ecosystemUI.panicBar = document.getElementById('panicBar');
+    ecosystemUI.stabilityBar = document.getElementById('stabilityBar');
+    ecosystemUI.healthBar = document.getElementById('healthBar');
+    ecosystemUI.capacity = document.getElementById('ecoCapacity');
+    ecosystemUI.note = document.getElementById('ecoNote');
+    ecosystemUI.panicValue = document.getElementById('panicValue');
+    ecosystemUI.stabilityValue = document.getElementById('stabilityValue');
+    ecosystemUI.healthValue = document.getElementById('healthValue');
+}
+
+function updateEcosystemPanelUI(snapshot) {
+    if (!snapshot || !ecosystemUI.panel) {
+        return;
+    }
+    
+    const { sensor, panic, stability, health, capacity, irreversible } = snapshot;
+    const formatPercent = (value) => `${Math.round(clamp01(value) * 100)}%`;
+
+    if (ecosystemUI.vector) {
+        ecosystemUI.vector.textContent = `${sensor.x.toFixed(2)}, ${sensor.y.toFixed(2)}, ${sensor.z.toFixed(2)}, ${sensor.a.toFixed(2)}`;
+    }
+    if (ecosystemUI.phase) {
+        ecosystemUI.phase.textContent = sensor.phase || '静水';
+    }
+
+    const applyBar = (el, value) => {
+        if (el) {
+            const percent = clamp01(value) * 100;
+            el.style.width = `${percent}%`;
+        }
+    };
+
+    applyBar(ecosystemUI.panicBar, panic);
+    applyBar(ecosystemUI.stabilityBar, stability);
+    applyBar(ecosystemUI.healthBar, health);
+
+    if (ecosystemUI.panicValue) {
+        ecosystemUI.panicValue.textContent = formatPercent(panic);
+    }
+    if (ecosystemUI.stabilityValue) {
+        ecosystemUI.stabilityValue.textContent = formatPercent(stability);
+    }
+    if (ecosystemUI.healthValue) {
+        ecosystemUI.healthValue.textContent = formatPercent(health);
+    }
+
+    if (ecosystemUI.capacity) {
+        ecosystemUI.capacity.textContent = `承载力 ${formatPercent(capacity)}`;
+        ecosystemUI.capacity.classList.toggle('warn', irreversible);
+    }
+
+    if (ecosystemUI.note) {
+        ecosystemUI.note.textContent = irreversible
+            ? '超过崩塌阈值：鱼群粒子上限被压低，需要长时间稳定才能缓慢恢复。'
+            : '越温和越接近稳态，轻微动荡后会自动修复鱼群粒子。';
+    }
+}
+
 // ===== 涟漪系统 =====
 class Ripple {
     constructor(x, y) {
@@ -458,6 +683,7 @@ function initPond() {
         fish.boundaryWeight = 2.0;
         fish.noiseScale = 0.003;
         fish.circlingDirection = Math.random() < 0.5 ? 1 : -1;
+        fish.ecoSensitivity = (Math.random() - 0.5) * 0.3; // 个体对生态波动的敏感度差异
         
         fishes.push(fish);
         
@@ -473,7 +699,16 @@ function initPond() {
 function bootstrap() {
     setupScaleControls();
     setupDebugControls();
+    setupEcosystemPanel();
     initPond();
+
+    if (!sensorStream) {
+        sensorStream = createMockAccelerometerStream();
+        sensorStream.onData((vector) => {
+            homeostasis.receiveSensor(vector);
+        });
+        homeostasis.receiveSensor(sensorStream.getLatest());
+    }
     
     // 加载池塘背景图片（底层）
     if (!backgroundImage) {
@@ -538,11 +773,11 @@ function bootstrap() {
         console.log('初始化粒子系统（视野自适应）...');
         particleSystem = new SimpleReglParticles(regl, {
             canvas: particleCanvas,
-            particleCount: 60000,     // Increased to 60000 to support more fish
+            particleCount: 90000,     // 提高上限，避免低点数显格子
             lifeSpan: 0.12,
             sizeRange: [1.5, 2.5],
             speedRange: [0.15, 0.8],
-            spawnRate: 20000,         // 提高生成率
+            spawnRate: BASE_PARTICLE_SPAWN_RATE,         // 提高生成率
             colorStart: [1.0, 0.4, 0.2, 0.98],
             colorEnd: [1.0, 0.6, 0.3, 0.0]
         });
@@ -688,6 +923,11 @@ function animate(currentTime) {
     // 计算deltaTime（秒）
     const deltaTime = lastTime === 0 ? 0 : (currentTime - lastTime) / 1000;
     lastTime = currentTime;
+
+    if (homeostasis) {
+        lastEcosystemSnapshot = homeostasis.step(deltaTime || 0.016);
+        updateEcosystemPanelUI(lastEcosystemSnapshot);
+    }
     
     // ===== 1. 获取玩家输入 =====
     const playerInput = keyboard.getMovementVector();
@@ -787,22 +1027,41 @@ function animate(currentTime) {
     
     // ===== 7. 粒子系统（只处理可见的鱼） =====
     if (particleSystem && visibleFishes.length > 0) {
-        // 根据 debug 模式调整采样密度
-        const sampleDensity = debugMode ? 3 : 1;  // debug 模式粗采样
+        const ecoSpawnMultiplier = homeostasis ? homeostasis.getParticleMultiplier() : 1;
+        const debugSpawnScale = debugMode ? debugParticleReduction : 1;
+        particleSystem.spawnRate = BASE_PARTICLE_SPAWN_RATE * ecoSpawnMultiplier * debugSpawnScale;
         
         const allSkeletonPoints = [];
         for (let fish of visibleFishes) {
-            const points = fish.sampleBodyPointsFromImage(offscreenCtx, sampleDensity);
+            const integrity = homeostasis ? homeostasis.getFishIntegrity(fish.ecoSensitivity) : 1;
+            const effectiveIntegrity = fish.isPlayer ? Math.max(integrity, 0.25) : integrity;
+            if (effectiveIntegrity <= 0.02) {
+                continue;
+            }
+
+            const baseDensity = debugMode ? 3 : 1;
+            const variableDensity = Math.max(baseDensity, Math.round(baseDensity + (1 - effectiveIntegrity) * 5));
+            const points = fish.sampleBodyPointsFromImage(offscreenCtx, variableDensity);
+            let filteredPoints = points;
+
+            if (effectiveIntegrity < 0.9) {
+                const keepChance = effectiveIntegrity;
+                filteredPoints = points.filter(() => Math.random() < keepChance);
+            }
+
+            if (filteredPoints.length === 0) {
+                continue;
+            }
             
             // 转换到屏幕坐标
-            const screenPoints = points.map(p => {
+            const screenPoints = filteredPoints.map(p => {
                 const screenPos = camera.worldToScreen(p.x, p.y);
                 return { ...p, x: screenPos.x, y: screenPos.y };
             });
             
             // Debug 模式时进一步降低粒子生成率
             if (debugMode) {
-                const reduction = Math.floor(1 / debugParticleReduction);
+                const reduction = Math.max(1, Math.floor(1 / debugParticleReduction));
                 for (let i = 0; i < screenPoints.length; i += reduction) {
                     allSkeletonPoints.push(screenPoints[i]);
                 }
@@ -817,7 +1076,9 @@ function animate(currentTime) {
                 '视野内鱼:', visibleFishes.length, '/', fishes.length,
                 '采样点:', allSkeletonPoints.length,
                 '活跃粒子:', particleSystem.particles.length,
-                'Debug:', debugMode ? `开(${(debugParticleReduction * 100).toFixed(0)}%)` : '关'
+                'Debug:', debugMode ? `开(${(debugParticleReduction * 100).toFixed(0)}%)` : '关',
+                '稳态:', (lastEcosystemSnapshot?.stability || 1).toFixed(2),
+                'spawn倍率:', (ecoSpawnMultiplier * debugSpawnScale).toFixed(2)
             );
         }
         
@@ -870,4 +1131,3 @@ function animate(currentTime) {
 }
 
 requestAnimationFrame(animate);
-

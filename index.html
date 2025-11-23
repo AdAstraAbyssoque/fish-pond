@@ -19,6 +19,7 @@
         <p>• 鱼群跟随玩家游动</p>
         <p>• 按 V 切换 Debug 视野模式</p>
         <p>• Debug: 鼠标滚轮缩放视野</p>
+        <p>• Mock 加速度输入驱动生态稳态/鱼群粒子</p>
     </div>
 
     <div id="controls" aria-label="池塘缩放调节">
@@ -41,6 +42,41 @@
         </div>
         <button id="resetScale" type="button">重置默认尺寸</button>
     </div>
+    <div id="eco-panel" aria-live="polite">
+        <div class="eco-head">
+            <div>
+                <p class="eco-label">池塘稳态</p>
+                <p id="sensorPhase" class="eco-phase">静水</p>
+            </div>
+            <span id="ecoCapacity" class="eco-badge">承载力 100%</span>
+        </div>
+        <div class="eco-row">
+            <span class="eco-row-label">Mock 传感器 x,y,z,a</span>
+            <span id="sensorVector" class="eco-row-value">0.00, 0.00, 0.00, 0.00</span>
+        </div>
+        <div class="eco-bar-row">
+            <span>动荡</span>
+            <div class="eco-bar">
+                <div id="panicBar" class="eco-bar-fill"></div>
+            </div>
+            <span id="panicValue" class="eco-bar-value">0%</span>
+        </div>
+        <div class="eco-bar-row">
+            <span>稳态</span>
+            <div class="eco-bar">
+                <div id="stabilityBar" class="eco-bar-fill"></div>
+            </div>
+            <span id="stabilityValue" class="eco-bar-value">100%</span>
+        </div>
+        <div class="eco-bar-row">
+            <span>鱼群活力</span>
+            <div class="eco-bar">
+                <div id="healthBar" class="eco-bar-fill"></div>
+            </div>
+            <span id="healthValue" class="eco-bar-value">100%</span>
+        </div>
+        <p id="ecoNote" class="eco-note">越温和越接近稳态，轻微动荡后会自动修复鱼群粒子。</p>
+    </div>
 
     <script src="node_modules/regl/dist/regl.min.js"></script>
     <script src="js/utils.js"></script>
@@ -54,4 +90,3 @@
     <script src="js/main.js"></script>
 </body>
 </html>
-

@@ -452,9 +452,14 @@ class Fish {
                     // 计算在尾巴中的位置比例（0=尾根，1=尾尖）
                     const tailProgress = isTail ? (x - tailStartX) / (width - tailStartX) : 0;
                     
+                    // 打散网格采样：给像素位置加一点随机抖动，避免粒子呈现规则网格
+                    const jitter = Math.max(0.5, sampleDensity * 0.7);
+                    const jx = (Math.random() - 0.5) * jitter;
+                    const jy = (Math.random() - 0.5) * jitter;
+                    
                     points.push({
-                        x: minX + x,
-                        y: minY + y,
+                        x: minX + x + jx,
+                        y: minY + y + jy,
                         color: [r / 255, g / 255, b / 255, alpha / 255],
                         isTail: isTail,
                         tailProgress: tailProgress  // 0-1，越靠近尾尖越大
