@@ -165,10 +165,35 @@ class Fish {
 
         // 使用合理的速度倍数（而不是固定的12）
         const moveSpeed = 8.0;  // 降低移动速度
-        const newPos = headPos.add(this.velocity.mult(moveSpeed));
-        const hardMargin = 30;
-        newPos.x = Math.max(hardMargin, Math.min(canvasWidth - hardMargin, newPos.x));
-        newPos.y = Math.max(hardMargin, Math.min(canvasHeight - hardMargin, newPos.y));
+        let newPos = headPos.add(this.velocity.mult(moveSpeed));
+        
+        // 碰撞检测：检查新位置是否可行走
+        if (window.isPositionWalkable && !window.isPositionWalkable(newPos.x, newPos.y)) {
+            // 如果新位置不可通过，尝试沿着边界滑动
+            // 1. 尝试只在 X 方向移动
+            const newPosX = new Vec2(newPos.x, headPos.y);
+            if (window.isPositionWalkable(newPosX.x, newPosX.y)) {
+                newPos = newPosX;
+            } else {
+                // 2. 尝试只在 Y 方向移动
+                const newPosY = new Vec2(headPos.x, newPos.y);
+                if (window.isPositionWalkable(newPosY.x, newPosY.y)) {
+                    newPos = newPosY;
+                } else {
+                    // 3. 两个方向都不行，则反弹
+                    newPos = headPos;
+                    // 反转速度方向（弹开效果）
+                    this.velocity = this.velocity.mult(-0.5);
+                }
+            }
+        }
+        
+        // 边界硬限制（作为额外保险）- 只在没有碰撞遮罩时使用
+        if (!window.isPositionWalkable) {
+            const hardMargin = 30;
+            newPos.x = Math.max(hardMargin, Math.min(canvasWidth - hardMargin, newPos.x));
+            newPos.y = Math.max(hardMargin, Math.min(canvasHeight - hardMargin, newPos.y));
+        }
 
         this.spine.resolve(newPos);
     }
