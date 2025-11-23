@@ -54,11 +54,15 @@ class Fish {
         this.maxCirclingTime = 3 + Math.random() * 4;
         this.circlingCooldown = 0;
         this.circlingDirection = Math.random() < 0.5 ? 1 : -1;
+
+        this.baseMaxSpeed = this.maxSpeed;
+        this.baseNoiseWeight = this.noiseWeight;
     }
 
-    resolve(otherFish, deltaTime, canvasWidth, canvasHeight, playerControl = null, playerFish = null) {
+    resolve(otherFish, deltaTime, canvasWidth, canvasHeight, playerControl = null, playerFish = null, ecoModifiers = null) {
         const headPos = this.spine.joints[0];
         this.noiseTime += deltaTime;
+        const eco = ecoModifiers || { speedMultiplier: 1, noiseMultiplier: 1, boundarySlowdown: 1 };
 
         const neighbors = [];
         const sameGroupNeighbors = [];
@@ -139,7 +143,8 @@ class Fish {
             acceleration = acceleration.add(separationForce.mult(this.separationWeight));
             acceleration = acceleration.add(alignmentForce.mult(this.alignmentWeight));
             acceleration = acceleration.add(cohesionForce.mult(this.cohesionWeight));
-            acceleration = acceleration.add(noiseForce.mult(this.noiseWeight));
+            const noiseWeight = this.baseNoiseWeight * eco.noiseMultiplier;
+            acceleration = acceleration.add(noiseForce.mult(noiseWeight));
             acceleration = acceleration.add(circlingForce.mult(this.circlingWeight));
             acceleration = acceleration.add(boundaryForce.mult(this.boundaryWeight));
             
@@ -153,7 +158,8 @@ class Fish {
         this.velocity = this.velocity.mult(0.98).add(acceleration);
 
         // 速度限制
-        const currentMaxSpeed = this.circlingTime > 0 ? this.maxSpeed * 0.8 : this.maxSpeed;
+        const dynamicMaxSpeed = this.baseMaxSpeed * (eco.speedMultiplier || 1);
+        const currentMaxSpeed = this.circlingTime > 0 ? dynamicMaxSpeed * 0.8 : dynamicMaxSpeed;
         if (this.velocity.mag() > currentMaxSpeed) {
             this.velocity = this.velocity.setMag(currentMaxSpeed);
         }
@@ -193,6 +199,16 @@ class Fish {
             const hardMargin = 30;
             newPos.x = Math.max(hardMargin, Math.min(canvasWidth - hardMargin, newPos.x));
             newPos.y = Math.max(hardMargin, Math.min(canvasHeight - hardMargin, newPos.y));
+        }
+
+        // 接近不可通行区时施加减速（配合生态动荡时的“撞墙减速”）
+        if (window.isPositionWalkable && eco.boundarySlowdown < 1) {
+            const probeDistance = 40;
+            const probeX = newPos.x + Math.sign(this.velocity.x) * probeDistance;
+            const probeY = newPos.y + Math.sign(this.velocity.y) * probeDistance;
+            if (!window.isPositionWalkable(probeX, probeY)) {
+                this.velocity = this.velocity.mult(eco.boundarySlowdown);
+            }
         }
 
         this.spine.resolve(newPos);

@@ -51,6 +51,7 @@ let collisionMaskData = null; // 碰撞遮罩的像素数据
 let playerFish = null;  // 玩家控制的鱼
 let normalZoom = 1.0; // 正常模式下的缩放（会在图片加载后更新）
 const ecosystemUI = {};
+const assetReady = { background: false, collision: false };
 
 // 创建离屏 canvas 用于图像采样（更大的尺寸）
 const offscreenCanvas = document.createElement('canvas');
@@ -73,6 +74,27 @@ let WORLD_HEIGHT = canvas.height * 2;  // 默认值，将在图片加载后更�
 // 地图参照物
 let landmarks = null;
 
+function setWorldSize(width, height) {
+    WORLD_WIDTH = width;
+    WORLD_HEIGHT = height;
+    console.log('地图尺寸更新为:', WORLD_WIDTH, 'x', WORLD_HEIGHT);
+    
+    const zoomX = canvas.width / WORLD_WIDTH;
+    const zoomY = canvas.height / WORLD_HEIGHT;
+        const fitZoom = Math.min(zoomX, zoomY);
+        // 稍微放大，避免背景看起来过小；同时遵守摄像机上下限
+        normalZoom = Math.max(camera.minZoom, Math.min(camera.maxZoom, fitZoom * 1.4));
+        camera.zoom = normalZoom;
+        camera.targetZoom = normalZoom;
+    console.log('正常缩放 (~1/3池塘):', normalZoom.toFixed(3));
+        console.log('整个池塘缩放:', (fitZoom * 0.95).toFixed(3));
+    
+    if (landmarks) {
+        const mapSize = Math.ceil(Math.max(WORLD_WIDTH, WORLD_HEIGHT) / canvas.width);
+        landmarks = new Landmarks(WORLD_WIDTH, WORLD_HEIGHT, mapSize);
+    }
+}
+
 // Debug 模式
 let debugMode = false;
 let debugParticleReduction = 1.0;  // 粒子数量倍率
@@ -90,6 +112,27 @@ let lastEcosystemSnapshot = null;
 
 function clampScale(value) {
     return Math.min(SCALE_RANGE.max, Math.max(SCALE_RANGE.min, value));
+}
+
+function allAssetsReady() {
+    return assetReady.background && assetReady.collision;
+}
+
+function getEcoModifiers(snapshot) {
+    if (!snapshot) {
+        return {
+            speedMultiplier: 1,
+            noiseMultiplier: 1,
+            vividBoost: 1,
+            boundarySlowdown: 1
+        };
+    }
+    const panic = clamp01(snapshot.panic);
+    const speedMultiplier = 1 + panic * 0.8;       // 越惊慌越快
+    const noiseMultiplier = 1 + panic * 0.9;       // 方向不确定性提升
+    const vividBoost = 1 + panic * 0.6;            // 颜色更鲜艳
+    const boundarySlowdown = 1 - Math.min(0.7, panic * 0.85); // 贴边时减速
+    return { speedMultiplier, noiseMultiplier, vividBoost, boundarySlowdown };
 }
 
 function clamp01(value) {
@@ -192,9 +235,9 @@ class PondHomeostasis {
 function createMockAccelerometerStream() {
     const listeners = [];
     const phases = [
-        { name: '静水', base: 0.8, spread: 1.1, jerk: [0.05, 0.3], duration: [4, 7] },
-        { name: '微扰', base: 3.4, spread: 2.8, jerk: [0.3, 1.2], duration: [5, 9] },
-        { name: '惊扰', base: 9.6, spread: 7.2, jerk: [1.1, 3.6], duration: [2.5, 4.5] }
+        { name: '静水', base: 0.6, spread: 0.8, jerk: [0.03, 0.18], duration: [5, 9] },
+        { name: '微扰', base: 2.4, spread: 1.6, jerk: [0.25, 0.8], duration: [6, 10] },
+        { name: '惊扰', base: 6.5, spread: 3.2, jerk: [0.7, 2.1], duration: [3, 5.5] }
     ];
     let currentPhase = { ...phases[0], remaining: randomRange(phases[0].duration[0], phases[0].duration[1]) };
     let lastVector = { x: 0, y: 0, z: 0, a: 0, magnitude: 0, phase: currentPhase.name };
@@ -324,10 +367,24 @@ function loadCollisionMask(imageSrc, callback) {
         }
         
         if (callback) callback();
+        
+        // 如果背景已加载且尺寸不一致，优先使用遮罩尺寸并提示
+        if (backgroundImage) {
+            if (backgroundImage.width !== collisionMaskImage.width || backgroundImage.height !== collisionMaskImage.height) {
+                console.warn('背景与碰撞遮罩尺寸不一致，采用遮罩尺寸驱动世界坐标');
+            }
+            setWorldSize(collisionMaskImage.width, collisionMaskImage.height);
+        } else {
+            setWorldSize(collisionMaskImage.width, collisionMaskImage.height);
+        }
     };
     
     collisionMaskImage.onerror = () => {
         console.error('碰撞遮罩加载失败');
+        assetReady.collision = true;
+        if (allAssetsReady()) {
+            initPond();
+        }
     };
 }
 
@@ -589,6 +646,11 @@ function checkFishMovementForRipples(deltaTime) {
 }
 
 function initPond() {
+    if (!allAssetsReady()) {
+        console.log('资源未就绪，延迟初始化池塘');
+        return;
+    }
+    
     fishes.length = 0;
     playerFish = null;
     
@@ -674,11 +736,13 @@ function initPond() {
         fish.alignmentRadius = 180;
         fish.cohesionRadius = 220;
         fish.maxSpeed = (0.6 + Math.random() * 0.3) * 0.67 * 0.5; // 速度减慢1/3后再减慢1/2
+        fish.baseMaxSpeed = fish.maxSpeed; // 动态动荡放大/回落时以当前速度为基准
         fish.maxForce = 0.03;
         fish.separationWeight = 2.0;
         fish.alignmentWeight = 0.6;
         fish.cohesionWeight = 0.5;
         fish.noiseWeight = 0.5;
+        fish.baseNoiseWeight = fish.noiseWeight;
         fish.boundaryMargin = 300;  // 更大的边界适应大地图
         fish.boundaryWeight = 2.0;
         fish.noiseScale = 0.003;
@@ -700,8 +764,7 @@ function bootstrap() {
     setupScaleControls();
     setupDebugControls();
     setupEcosystemPanel();
-    initPond();
-
+    
     if (!sensorStream) {
         sensorStream = createMockAccelerometerStream();
         sensorStream.onData((vector) => {
@@ -717,29 +780,21 @@ function bootstrap() {
         backgroundImage.src = 'assets/pond2.PNG';
         backgroundImage.onload = () => {
             console.log('池塘背景图片加载完成，尺寸:', backgroundImage.width, 'x', backgroundImage.height);
-            // 更新地图尺寸为图片尺寸
-            WORLD_WIDTH = backgroundImage.width;
-            WORLD_HEIGHT = backgroundImage.height;
-            console.log('地图尺寸已更新为:', WORLD_WIDTH, 'x', WORLD_HEIGHT);
+            setWorldSize(backgroundImage.width, backgroundImage.height);
             
-            // 调整摄像机初始缩放，让视角更大（只显示池塘约1/4区域）
-            const zoomX = canvas.width / WORLD_WIDTH;
-            const zoomY = canvas.height / WORLD_HEIGHT;
-            const fitZoom = Math.min(zoomX, zoomY); // 铺满屏幕的缩放
-            normalZoom = fitZoom * 2.0; // 放大2倍，显示约1/4池塘
-            camera.zoom = normalZoom;
-            camera.targetZoom = normalZoom;
-            console.log('正常缩放 (1/4池塘):', normalZoom.toFixed(3));
-            console.log('整个池塘缩放:', (fitZoom * 0.95).toFixed(3));
-            
-            // 重新初始化地图参照物（如果已存在）
-            if (landmarks) {
-                const mapSize = Math.ceil(Math.max(WORLD_WIDTH, WORLD_HEIGHT) / canvas.width);
-                landmarks = new Landmarks(WORLD_WIDTH, WORLD_HEIGHT, mapSize);
+            if (collisionMaskImage && (collisionMaskImage.width !== backgroundImage.width || collisionMaskImage.height !== backgroundImage.height)) {
+                console.warn('背景与碰撞遮罩尺寸不一致，优先采用遮罩尺寸');
+                setWorldSize(collisionMaskImage.width, collisionMaskImage.height);
+            }
+
+            assetReady.background = true;
+            if (allAssetsReady()) {
+                initPond();
             }
         };
         backgroundImage.onerror = () => {
             console.error('池塘背景图片加载失败');
+            assetReady.background = true; // 尝试继续
         };
     }
     
@@ -760,6 +815,10 @@ function bootstrap() {
     console.log('加载碰撞遮罩...');
     loadCollisionMask('assets/riverbank2.PNG', () => {
         console.log('碰撞检测系统已就绪');
+        assetReady.collision = true;
+        if (allAssetsReady()) {
+            initPond();
+        }
     });
     
     // 初始化地图参照物
@@ -928,6 +987,7 @@ function animate(currentTime) {
         lastEcosystemSnapshot = homeostasis.step(deltaTime || 0.016);
         updateEcosystemPanelUI(lastEcosystemSnapshot);
     }
+    const ecoModifiers = getEcoModifiers(lastEcosystemSnapshot);
     
     // ===== 1. 获取玩家输入 =====
     const playerInput = keyboard.getMovementVector();
@@ -936,7 +996,7 @@ function animate(currentTime) {
     // ===== 2. 更新所有鱼（带玩家控制） =====
     for (let fish of fishes) {
         const control = fish.isPlayer ? playerInput : null;
-        fish.resolve(fishes, deltaTime, WORLD_WIDTH, WORLD_HEIGHT, control, playerFish);
+        fish.resolve(fishes, deltaTime, WORLD_WIDTH, WORLD_HEIGHT, control, playerFish, ecoModifiers);
     }
     
     // ===== 3. 摄像机跟随玩家鱼 =====
@@ -1038,6 +1098,7 @@ function animate(currentTime) {
             if (effectiveIntegrity <= 0.02) {
                 continue;
             }
+            const vividBoost = ecoModifiers.vividBoost || 1;
 
             const baseDensity = debugMode ? 3 : 1;
             const variableDensity = Math.max(baseDensity, Math.round(baseDensity + (1 - effectiveIntegrity) * 5));
@@ -1049,6 +1110,15 @@ function animate(currentTime) {
                 filteredPoints = points.filter(() => Math.random() < keepChance);
             }
 
+            // 贴边时在高动荡下加速消散：减少保留粒子
+            if (window.isPositionWalkable && ecoModifiers.boundarySlowdown < 1) {
+                const head = fish.spine.joints[0];
+                const probe = window.isPositionWalkable(head.x, head.y) && !window.isPositionWalkable(head.x + 20, head.y + 20);
+                if (probe) {
+                    filteredPoints = filteredPoints.filter(() => Math.random() < ecoModifiers.boundarySlowdown);
+                }
+            }
+
             if (filteredPoints.length === 0) {
                 continue;
             }
@@ -1056,7 +1126,16 @@ function animate(currentTime) {
             // 转换到屏幕坐标
             const screenPoints = filteredPoints.map(p => {
                 const screenPos = camera.worldToScreen(p.x, p.y);
-                return { ...p, x: screenPos.x, y: screenPos.y };
+                let boostedColor = p.color;
+                if (vividBoost !== 1 && p.color) {
+                    boostedColor = [
+                        Math.min(1, p.color[0] * vividBoost),
+                        Math.min(1, p.color[1] * vividBoost * 0.95),
+                        Math.min(1, p.color[2] * vividBoost * 0.9),
+                        p.color[3]
+                    ];
+                }
+                return { ...p, x: screenPos.x, y: screenPos.y, color: boostedColor };
             });
             
             // Debug 模式时进一步降低粒子生成率
