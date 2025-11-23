@@ -77,7 +77,7 @@ let debugMode = false;
 let debugParticleReduction = 1.0;  // 粒子数量倍率
 
 const SCALE_STORAGE_KEY = 'pondScaleRatio';
-const SCALE_RANGE = { min: 0.05, max: 1.2, default: 0.05 };
+const SCALE_RANGE = { min: 0.05, max: 1.2, default: 0.16 };
 
 function clampScale(value) {
     return Math.min(SCALE_RANGE.max, Math.max(SCALE_RANGE.min, value));
