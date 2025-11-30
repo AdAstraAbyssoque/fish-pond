@@ -13,13 +13,12 @@
         <canvas id="overlay-canvas"></canvas>
     </div>
     <div id="info">
-        <p>大世界探索</p>
+        <p>🎮 锦鲤池塘 - 实时传感器驱动</p>
         <p>• WASD 控制橙色锦鲤</p>
-        <p>• 2x2 大地图，20-24条鱼</p>
-        <p>• 鱼群跟随玩家游动</p>
+        <p>• 摇晃传感器控制鱼群行为</p>
         <p>• 按 V 切换 Debug 视野模式</p>
         <p>• Debug: 鼠标滚轮缩放视野</p>
-        <p id="sensor-status" style="margin-top: 8px; font-weight: bold;">⚡ 加速度传感器：初始化中...</p>
+        <p id="sensor-status" style="margin-top: 8px; font-weight: bold; color: #ffaa00;">⚡ BWT901BLE 传感器：初始化中...</p>
     </div>
 
     <div id="controls" aria-label="池塘缩放调节">
@@ -51,8 +50,17 @@
             <span id="ecoCapacity" class="eco-badge">承载力 100%</span>
         </div>
         <div class="eco-row">
-            <span class="eco-row-label">Mock 传感器 x,y,z,a</span>
+            <span class="eco-row-label">🎯 BWT901BLE 传感器 x,y,z,a</span>
             <span id="sensorVector" class="eco-row-value">0.00, 0.00, 0.00, 0.00</span>
+        </div>
+        <div class="eco-row" style="background: rgba(0, 200, 255, 0.1); padding: 8px; border-radius: 4px; margin-top: 8px;">
+            <span class="eco-row-label">📐 角度调试</span>
+            <div id="angleDebug" class="eco-row-value" style="font-size: 11px; line-height: 1.6;">
+                <div>传感器角度: <span id="sensorAngleDeg">-</span>°</div>
+                <div>目标方向: <span id="targetAngleDeg">-</span>°</div>
+                <div>当前方向: <span id="currentAngleDeg">-</span>°</div>
+                <div>角度差: <span id="angleDiffDeg">-</span>°</div>
+            </div>
         </div>
         <div class="eco-bar-row">
             <span>动荡</span>
@@ -75,7 +83,7 @@
             </div>
             <span id="healthValue" class="eco-bar-value">100%</span>
         </div>
-        <p id="ecoNote" class="eco-note">越温和越接近稳态，轻微动荡后会自动修复鱼群粒子。</p>
+        <p id="ecoNote" class="eco-note">💡 摇晃传感器改变水体状态，静置后自动恢复平衡。</p>
     </div>
 
     <script src="node_modules/regl/dist/regl.min.js"></script>

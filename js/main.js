@@ -36,6 +36,9 @@ window.addEventListener('resize', () => {
     camera.viewWidth = canvas.width;
     camera.viewHeight = canvas.height;
     
+    // 视野改变后，重新限制摄像机位置
+    camera.clampPosition();
+    
     if (particleSystem) {
         particleSystem.canvas = particleCanvas;
     }
@@ -79,15 +82,23 @@ function setWorldSize(width, height) {
     WORLD_HEIGHT = height;
     console.log('地图尺寸更新为:', WORLD_WIDTH, 'x', WORLD_HEIGHT);
     
+    // 设置摄像机边界（池塘图片边缘）
+    camera.setWorldBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+    console.log('摄像机边界已设置:', 0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+    
     const zoomX = canvas.width / WORLD_WIDTH;
     const zoomY = canvas.height / WORLD_HEIGHT;
         const fitZoom = Math.min(zoomX, zoomY);
         // 稍微放大，避免背景看起来过小；同时遵守摄像机上下限
-        normalZoom = Math.max(camera.minZoom, Math.min(camera.maxZoom, fitZoom * 1.4));
+        // 放大1.5倍
+        normalZoom = Math.max(camera.minZoom, Math.min(camera.maxZoom, fitZoom * 1.4 * 1.5));
         camera.zoom = normalZoom;
         camera.targetZoom = normalZoom;
-    console.log('正常缩放 (~1/3池塘):', normalZoom.toFixed(3));
+    console.log('正常缩放 (放大2倍):', normalZoom.toFixed(3));
         console.log('整个池塘缩放:', (fitZoom * 0.95).toFixed(3));
+    
+    // 初始化时限制摄像机位置
+    camera.clampPosition();
     
     if (landmarks) {
         const mapSize = Math.ceil(Math.max(WORLD_WIDTH, WORLD_HEIGHT) / canvas.width);
@@ -124,7 +135,8 @@ function getEcoModifiers(snapshot) {
             speedMultiplier: 1,
             noiseMultiplier: 1,
             vividBoost: 1,
-            boundarySlowdown: 1
+            boundarySlowdown: 1,
+            sensorAngle: null
         };
     }
     const panic = clamp01(snapshot.panic);
@@ -132,7 +144,15 @@ function getEcoModifiers(snapshot) {
     const noiseMultiplier = 1 + panic * 0.9;       // 方向不确定性提升
     const vividBoost = 1 + panic * 0.6;            // 颜色更鲜艳
     const boundarySlowdown = 1 - Math.min(0.7, panic * 0.85); // 贴边时减速
-    return { speedMultiplier, noiseMultiplier, vividBoost, boundarySlowdown };
+    
+    // 传递传感器角度数据（使用 angle 字段，即 AngX）
+    // AngX 0-180度 → 鱼左转0-180度
+    // AngX -180到0度 → 鱼右转0-180度
+    const sensorAngle = snapshot.sensor 
+        ? (snapshot.sensor.angle !== undefined ? snapshot.sensor.angle : snapshot.sensor.AngX)
+        : null;
+    
+    return { speedMultiplier, noiseMultiplier, vividBoost, boundarySlowdown, sensorAngle };
 }
 
 function clamp01(value) {
@@ -159,7 +179,7 @@ function randomUnitVector3() {
     };
 }
 
-// 生态稳态模型：把传感器的加速度映射为池塘“压力”和“健康度”
+// 生态稳态模型：把传感器的加速度映射为池塘"压力"和"健康度"
 class PondHomeostasis {
     constructor() {
         this.sensor = { x: 0, y: 0, z: 0, a: 0, magnitude: 0, phase: '静水' };
@@ -168,6 +188,10 @@ class PondHomeostasis {
         this.health = 1;      // 鱼群健康/活力
         this.capacity = 1;    // 池塘承载力（掉下去后不完全恢复）
         this.collapseDebt = 0;
+        
+        // 惊扰计时器
+        this.panicTime = 0;           // 累计惊扰时间
+        this.isPermanentlyDead = false; // 是否永久死亡
     }
 
     receiveSensor(vector) {
@@ -175,6 +199,23 @@ class PondHomeostasis {
     }
 
     step(deltaTime) {
+        // 如果已经永久死亡，直接返回死亡状态
+        if (this.isPermanentlyDead) {
+            return {
+                sensor: this.sensor,
+                panic: 1.0,
+                instability: 1.0,
+                stability: 0,
+                health: 0,
+                capacity: 0,
+                irreversible: true,
+                fishIntegrity: 0,
+                particleMultiplier: 0,
+                panicTime: this.panicTime,
+                isPermanentlyDead: true
+            };
+        }
+        
         const magnitude = Math.sqrt(
             this.sensor.x * this.sensor.x +
             this.sensor.y * this.sensor.y +
@@ -182,25 +223,51 @@ class PondHomeostasis {
         );
         const jerk = Math.abs(this.sensor.a);
 
-        // 将加速度映射为动荡度，a 维度提供额外“突发”权重
-        const agitation = clamp01(magnitude * 0.045 + jerk * 0.18);
-        this.panic = damp(this.panic, agitation, 3.4, deltaTime);
+        // 将加速度映射为动荡度，a 维度提供额外"突发"权重
+        const agitation = clamp01(magnitude * 0.06 + jerk * 0.15);  // 适中的敏感度
+        this.panic = damp(this.panic, agitation, 3.8, deltaTime);  // 中等阻尼，反应明显但不过激
+        
+        // 判断是否处于惊扰状态（phase 为 "惊扰"）
+        const isInPanic = this.sensor.phase === '惊扰';
+        
+        if (isInPanic) {
+            this.panicTime += deltaTime;
+            
+            // 惊扰超过10秒 → 永久死亡
+            if (this.panicTime >= 10) {
+                this.isPermanentlyDead = true;
+                this.health = 0;
+                this.capacity = 0;
+                console.log('💀 池塘生态系统永久崩溃！惊扰持续时间:', this.panicTime.toFixed(1), '秒');
+            }
+            // 惊扰超过2秒 → 鱼开始消失（健康度快速下降）
+            else if (this.panicTime >= 2) {
+                const deathProgress = Math.min(1, (this.panicTime - 2) / 2);  // 2-4秒内逐渐消失
+                this.health = Math.max(0, 1 - deathProgress);
+                if (this.panicTime === Math.floor(this.panicTime)) {
+                    console.log('⚠️ 惊扰已持续', Math.floor(this.panicTime), '秒，鱼群健康度:', (this.health * 100).toFixed(0) + '%');
+                }
+            }
+        } else {
+            // 不在惊扰状态时，重置计时器
+            this.panicTime = Math.max(0, this.panicTime - deltaTime * 2);  // 快速衰减
+        }
 
         // 稳态越高，恢复力越强；动荡越高，稳态越低
-        const stabilityTarget = clamp01(1 - this.panic * 0.9 + this.capacity * 0.12);
-        this.stability = damp(this.stability, stabilityTarget, 2.2, deltaTime);
+        const stabilityTarget = clamp01(1 - this.panic * 0.75 + this.capacity * 0.15);  // 增加 panic 的影响
+        this.stability = damp(this.stability, stabilityTarget, 2.5, deltaTime);  // 中等恢复速度
 
         // 恢复与伤害，结合稳态与动荡
-        const damage = (0.36 + this.collapseDebt * 0.65) * Math.pow(this.panic, 1.25);
+        const damage = (0.25 + this.collapseDebt * 0.4) * Math.pow(this.panic, 1.3);  // 适中的伤害
         const recovery = Math.max(0, this.stability - this.health) *
-            (0.55 * this.capacity) *
-            (1 - this.panic * 0.75);
+            (0.7 * this.capacity) *  // 中等恢复速度
+            (1 - this.panic * 0.5);  // 适中的 panic 抑制
         this.health = clamp01(this.health + (recovery - damage) * deltaTime);
 
-        // 低于阈值后触发不可逆的承载力衰减
-        if (this.health < 0.24) {
-            this.collapseDebt = clamp01(this.collapseDebt + (0.11 + this.panic * 0.45) * deltaTime);
-            this.capacity = Math.max(0.32, 1 - this.collapseDebt);
+        // 低于阈值后触发承载力衰减（降低阈值，减缓衰减速度）
+        if (this.health < 0.15) {  // 从 0.24 降到 0.15，更难触发
+            this.collapseDebt = clamp01(this.collapseDebt + (0.05 + this.panic * 0.2) * deltaTime);  // 减缓衰减
+            this.capacity = Math.max(0.5, 1 - this.collapseDebt);  // 提高最低承载力
         }
 
         const fishIntegrity = clamp01(this.health * this.capacity * (1 - this.panic * 0.25));
@@ -215,13 +282,26 @@ class PondHomeostasis {
             capacity: this.capacity,
             irreversible: this.capacity < 0.99,
             fishIntegrity,
-            particleMultiplier
+            particleMultiplier,
+            panicTime: this.panicTime,
+            isPermanentlyDead: this.isPermanentlyDead
         };
     }
 
     getFishIntegrity(offset = 0) {
-        const base = clamp01(this.health * this.capacity * (1 - this.panic * 0.3));
-        return clamp01(base * (1 + offset));
+        // 如果永久死亡，返回0
+        if (this.isPermanentlyDead) {
+            return 0;
+        }
+        
+        // 惊扰超过2秒后，完整度快速下降
+        if (this.panicTime >= 2) {
+            const deathProgress = Math.min(1, (this.panicTime - 2) / 2);  // 2-4秒内从1降到0
+            return Math.max(0, 1 - deathProgress);
+        }
+        
+        const base = clamp01(this.health * this.capacity * (1 - this.panic * 0.35));
+        return Math.max(0.2, clamp01(base * (1 + offset)));
     }
 
     getParticleMultiplier() {
@@ -233,9 +313,9 @@ class PondHomeostasis {
 
 // ============= 加速度数据流 =============
 
-// 配置：使用真实传感器还是模拟数据
-const USE_REAL_SENSOR = true;  // 改为 false 使用模拟数据
-const WEBSOCKET_URL = 'ws://localhost:8765';
+// 配置：连接到真实传感器后端（BWT901BLE5.0）
+const USE_REAL_SENSOR = true;  // true=真实传感器后端, false=模拟数据
+const WEBSOCKET_URL = 'ws://localhost:8765';  // Python WebSocket 服务器地址
 
 // 模拟一个"Python 后端"源源推送四维加速度（x, y, z, a）
 function createMockAccelerometerStream() {
@@ -401,10 +481,12 @@ function createRealAccelerometerStream() {
 // 工厂函数：根据配置创建数据流
 function createAccelerometerStream() {
     if (USE_REAL_SENSOR) {
-        console.log('🔧 使用真实传感器数据');
+        console.log('🎯 使用真实传感器数据 (BWT901BLE5.0)');
+        console.log('📡 连接到:', WEBSOCKET_URL);
+        console.log('💡 提示：确保 Python WebSocket 服务器正在运行');
         return createRealAccelerometerStream();
     } else {
-        console.log('🔧 使用模拟传感器数据');
+        console.log('🎲 使用模拟传感器数据 (Mock)');
         return createMockAccelerometerStream();
     }
 }
@@ -643,14 +725,73 @@ function updateEcosystemPanelUI(snapshot) {
         return;
     }
     
-    const { sensor, panic, stability, health, capacity, irreversible } = snapshot;
+    const { sensor, panic, stability, health, capacity, irreversible, panicTime, isPermanentlyDead } = snapshot;
     const formatPercent = (value) => `${Math.round(clamp01(value) * 100)}%`;
 
     if (ecosystemUI.vector) {
-        ecosystemUI.vector.textContent = `${sensor.x.toFixed(2)}, ${sensor.y.toFixed(2)}, ${sensor.z.toFixed(2)}, ${sensor.a.toFixed(2)}`;
+        const angleInfo = sensor.AngX !== undefined 
+            ? ` | AngX: ${sensor.AngX.toFixed(1)}°` 
+            : '';
+        ecosystemUI.vector.textContent = `${sensor.x.toFixed(2)}, ${sensor.y.toFixed(2)}, ${sensor.z.toFixed(2)}, ${sensor.a.toFixed(2)}${angleInfo}`;
+    }
+    
+    // 更新角度调试信息
+    if (window.sensorAngleDebug) {
+        const debug = window.sensorAngleDebug;
+        const sensorAngleEl = document.getElementById('sensorAngleDeg');
+        const targetAngleEl = document.getElementById('targetAngleDeg');
+        const currentAngleEl = document.getElementById('currentAngleDeg');
+        const angleDiffEl = document.getElementById('angleDiffDeg');
+        const angleDirectionEl = document.getElementById('angleDirection');
+        
+        if (sensorAngleEl) sensorAngleEl.textContent = debug.sensorAngleDeg.toFixed(1);
+        if (targetAngleEl) targetAngleEl.textContent = debug.targetAngleDeg.toFixed(1);
+        if (currentAngleEl) currentAngleEl.textContent = debug.currentAngleDeg.toFixed(1);
+        if (angleDirectionEl) {
+            angleDirectionEl.textContent = debug.direction || '';
+            angleDirectionEl.style.color = debug.sensorAngleDeg >= 0 ? '#00ff00' : '#ffaa00'; // 左转绿色，右转橙色
+        }
+        if (angleDiffEl) {
+            angleDiffEl.textContent = debug.angleDiffDeg.toFixed(1);
+            // 根据角度差显示颜色
+            const absDiff = Math.abs(debug.angleDiffDeg);
+            if (absDiff < 10) {
+                angleDiffEl.style.color = '#00ff00'; // 绿色：接近目标
+            } else if (absDiff < 45) {
+                angleDiffEl.style.color = '#ffaa00'; // 橙色：中等偏差
+            } else {
+                angleDiffEl.style.color = '#ff0000'; // 红色：大偏差
+            }
+        }
+    } else {
+        // 没有调试信息时显示占位符
+        const sensorAngleEl = document.getElementById('sensorAngleDeg');
+        const targetAngleEl = document.getElementById('targetAngleDeg');
+        const currentAngleEl = document.getElementById('currentAngleDeg');
+        const angleDiffEl = document.getElementById('angleDiffDeg');
+        const angleDirectionEl = document.getElementById('angleDirection');
+        if (sensorAngleEl) sensorAngleEl.textContent = '-';
+        if (targetAngleEl) targetAngleEl.textContent = '-';
+        if (currentAngleEl) currentAngleEl.textContent = '-';
+        if (angleDiffEl) {
+            angleDiffEl.textContent = '-';
+            angleDiffEl.style.color = '';
+        }
+        if (angleDirectionEl) angleDirectionEl.textContent = '';
     }
     if (ecosystemUI.phase) {
-        ecosystemUI.phase.textContent = sensor.phase || '静水';
+        // 显示状态和惊扰计时
+        let phaseText = sensor.phase || '静水';
+        if (sensor.phase === '惊扰' && panicTime > 0) {
+            phaseText += ` (${panicTime.toFixed(1)}s)`;
+            if (panicTime >= 2) {
+                phaseText += ' ⚠️';
+            }
+        }
+        if (isPermanentlyDead) {
+            phaseText = '💀 永久死亡';
+        }
+        ecosystemUI.phase.textContent = phaseText;
     }
 
     const applyBar = (el, value) => {
@@ -680,9 +821,29 @@ function updateEcosystemPanelUI(snapshot) {
     }
 
     if (ecosystemUI.note) {
-        ecosystemUI.note.textContent = irreversible
-            ? '超过崩塌阈值：鱼群粒子上限被压低，需要长时间稳定才能缓慢恢复。'
-            : '越温和越接近稳态，轻微动荡后会自动修复鱼群粒子。';
+        if (isPermanentlyDead) {
+            ecosystemUI.note.textContent = '💀 池塘生态系统已永久崩溃，所有鱼类死亡。刷新页面重新开始。';
+            ecosystemUI.note.style.color = '#ff0000';
+            ecosystemUI.note.style.fontWeight = 'bold';
+        } else if (sensor.phase === '惊扰' && panicTime >= 2) {
+            const remaining = (10 - panicTime).toFixed(0);
+            ecosystemUI.note.textContent = `⚠️ 鱼群正在消失！再持续 ${remaining} 秒将永久死亡！停止摇晃！`;
+            ecosystemUI.note.style.color = '#ff3300';
+            ecosystemUI.note.style.fontWeight = 'bold';
+        } else if (sensor.phase === '惊扰') {
+            const remaining = (2 - panicTime).toFixed(1);
+            ecosystemUI.note.textContent = `⚡ 惊扰状态！${remaining} 秒后鱼开始消失，停止摇晃恢复平静。`;
+            ecosystemUI.note.style.color = '#ffaa00';
+            ecosystemUI.note.style.fontWeight = 'normal';
+        } else if (irreversible) {
+            ecosystemUI.note.textContent = '超过崩塌阈值：鱼群粒子上限被压低，需要长时间稳定才能缓慢恢复。';
+            ecosystemUI.note.style.color = '';
+            ecosystemUI.note.style.fontWeight = 'normal';
+        } else {
+            ecosystemUI.note.textContent = '💡 摇晃传感器改变水体状态，静置后自动恢复平衡。';
+            ecosystemUI.note.style.color = '';
+            ecosystemUI.note.style.fontWeight = 'normal';
+        }
     }
 }
 
@@ -858,7 +1019,7 @@ function initPond() {
         fish.separationRadius = 130;
         fish.alignmentRadius = 180;
         fish.cohesionRadius = 220;
-        fish.maxSpeed = (0.6 + Math.random() * 0.3) * 0.67 * 0.5; // 速度减慢1/3后再减慢1/2
+        fish.maxSpeed = (0.6 + Math.random() * 0.3) * 0.67 * 0.5; // 速度减慢1/3后再减慢1/2（恢复原值）
         fish.baseMaxSpeed = fish.maxSpeed; // 动态动荡放大/回落时以当前速度为基准
         fish.maxForce = 0.03;
         fish.separationWeight = 2.0;
@@ -1113,14 +1274,10 @@ function animate(currentTime) {
     }
     const ecoModifiers = getEcoModifiers(lastEcosystemSnapshot);
     
-    // ===== 1. 获取玩家输入 =====
-    const playerInput = keyboard.getMovementVector();
-    const hasPlayerInput = keyboard.hasInput();
-    
-    // ===== 2. 更新所有鱼（带玩家控制） =====
+    // ===== 2. 更新所有鱼（只由传感器角度控制） =====
     for (let fish of fishes) {
-        const control = fish.isPlayer ? playerInput : null;
-        fish.resolve(fishes, deltaTime, WORLD_WIDTH, WORLD_HEIGHT, control, playerFish, ecoModifiers);
+        // 移除玩家控制，所有鱼都只受传感器角度控制
+        fish.resolve(fishes, deltaTime, WORLD_WIDTH, WORLD_HEIGHT, null, null, ecoModifiers);
     }
     
     // ===== 3. 摄像机跟随玩家鱼 =====
@@ -1218,10 +1375,14 @@ function animate(currentTime) {
         const allSkeletonPoints = [];
         for (let fish of visibleFishes) {
             const integrity = homeostasis ? homeostasis.getFishIntegrity(fish.ecoSensitivity) : 1;
-            const effectiveIntegrity = fish.isPlayer ? Math.max(integrity, 0.25) : integrity;
-            if (effectiveIntegrity <= 0.02) {
+            
+            // 如果完整度为0（永久死亡或惊扰>4秒），跳过这条鱼
+            if (integrity <= 0) {
                 continue;
             }
+            
+            const effectiveIntegrity = fish.isPlayer ? Math.max(integrity, 0.3) : integrity;
+            // 惊扰状态下鱼会根据时间逐渐消失
             const vividBoost = ecoModifiers.vividBoost || 1;
 
             const baseDensity = debugMode ? 3 : 1;

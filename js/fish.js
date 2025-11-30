@@ -4,6 +4,7 @@ const BASE_BODY_WIDTH = [40, 48, 50, 50, 46, 38, 30, 23, 19, 11];
 const BASE_SELECTION_RADIUS = 60;
 const MIN_SELECTION_RADIUS = 18;
 const MIN_PULSE_SIZE = 30;
+const SPEED_SCALE = 0.5; // 全局速度缩放，0.5 表示降到原来的二分之一
 
 class Fish {
     constructor(origin, type = 'white', scale = 1) {
@@ -40,9 +41,9 @@ class Fish {
         this.boundaryMargin = 150;
         this.boundaryWeight = 3.5;
 
-        this.velocity = Vec2.fromAngle(Math.random() * Math.PI * 2).setMag(0.5);
-        this.maxSpeed = 1.2;
-        this.maxForce = 0.04;
+        this.velocity = Vec2.fromAngle(Math.random() * Math.PI * 2).setMag(0.5 * SPEED_SCALE);  // 初始速度
+        this.maxSpeed = 1.2 * SPEED_SCALE;  // 最大速度
+        this.maxForce = 0.04 * SPEED_SCALE;
 
         this.noiseOffsetX = Math.random() * 1000;
         this.noiseOffsetY = Math.random() * 1000;
@@ -64,95 +65,122 @@ class Fish {
         this.noiseTime += deltaTime;
         const eco = ecoModifiers || { speedMultiplier: 1, noiseMultiplier: 1, boundarySlowdown: 1 };
 
-        const neighbors = [];
-        const sameGroupNeighbors = [];
-        
-        // 玩家鱼吸引力
-        let playerAttractionForce = new Vec2(0, 0);
-        if (playerFish && !this.isPlayer) {
-            const playerHead = playerFish.spine.joints[0];
-            const dx = playerHead.x - headPos.x;
-            const dy = playerHead.y - headPos.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            
-            // 在较大范围内（800px）受到玩家吸引
-            if (dist < 800 && dist > 50) {
-                const dir = new Vec2(dx, dy).setMag(1);  // 归一化向量
-                const strength = Math.min(1.0, (800 - dist) / 800) * 0.5;
-                playerAttractionForce = dir.mult(this.maxForce * strength);
-            }
-        }
-        
-        for (let other of otherFish) {
-            if (other === this) continue;
-            const dist = headPos.sub(other.spine.joints[0]).mag();
-            if (dist < this.cohesionRadius) {
-                neighbors.push({ fish: other, distance: dist });
-                if (other.groupId === this.groupId || other.isPlayer) {
-                    sameGroupNeighbors.push({ fish: other, distance: dist });
-                }
-            }
-        }
-
-        if (this.circlingCooldown > 0) {
-            this.circlingCooldown -= deltaTime;
-        }
-
-        if (this.circlingTime > 0) {
-            this.circlingTime -= deltaTime;
-            if (this.circlingTime <= 0) {
-                this.circlingCenter = null;
-                this.circlingWeight = 0;
-                this.circlingCooldown = 5 + Math.random() * 5;
-            }
-        } else if (sameGroupNeighbors.length >= 3 && this.circlingCooldown <= 0) {
-            this.circlingTime = this.maxCirclingTime;
-            this.circlingWeight = 1.2;
-            let center = new Vec2(0, 0);
-            for (let n of sameGroupNeighbors) {
-                center = center.add(n.fish.spine.joints[0]);
-            }
-            center = center.add(headPos);
-            this.circlingCenter = center.mult(1 / (sameGroupNeighbors.length + 1));
-        }
+        // 移除所有集群行为和玩家吸引力，只保留传感器角度控制
 
         let acceleration = new Vec2(0, 0);
         
-        // 如果有玩家控制输入
-        if (playerControl && (playerControl.x !== 0 || playerControl.y !== 0)) {
-            // 玩家控制模式：强制朝向输入方向
-            const controlForce = new Vec2(playerControl.x, playerControl.y).mult(this.maxForce * 8);
-            acceleration = acceleration.add(controlForce);
+        // 传感器角度控制（唯一控制方式）
+        if (ecoModifiers && ecoModifiers.sensorAngle !== null && ecoModifiers.sensorAngle !== undefined) {
+            // 传感器角度：AngX
+            // AngX 0-180度 → 鱼左转0-180度（映射到0-π弧度）
+            // AngX 0到-180度 → 鱼右转0-180度（映射到π-2π弧度，即-π到0弧度）
+            let sensorAngleDeg = ecoModifiers.sensorAngle;
             
-            // 仍然保留分离力避免撞其他鱼
-            const separationForce = this.calculateSeparation(neighbors);
-            acceleration = acceleration.add(separationForce.mult(this.separationWeight * 0.5));
+            // 映射规则：
+            // 0-180度 → 0-π 弧度（直接映射）
+            // -180到0度 → 转换为180-360度，然后映射到π-2π弧度（即-π到0弧度）
+            let targetAngle;
+            if (sensorAngleDeg >= 0 && sensorAngleDeg <= 180) {
+                // 左转：0-180度 → 0-π 弧度
+                targetAngle = (sensorAngleDeg / 180) * Math.PI;
+            } else if (sensorAngleDeg < 0 && sensorAngleDeg >= -180) {
+                // 右转：-180到0度 → 转换为180-360度 → π-2π弧度
+                // 例如：-180° → 180° → π, -90° → 270° → 3π/2, 0° → 360° → 2π
+                const normalizedDeg = 360 + sensorAngleDeg; // -180 → 180, -90 → 270, 0 → 360
+                targetAngle = (normalizedDeg / 180) * Math.PI; // 180 → π, 270 → 3π/2, 360 → 2π
+            } else {
+                // 超出范围，归一化到-180到180
+                sensorAngleDeg = ((sensorAngleDeg % 360) + 360) % 360;
+                if (sensorAngleDeg > 180) sensorAngleDeg -= 360;
+                if (sensorAngleDeg >= 0) {
+                    targetAngle = (sensorAngleDeg / 180) * Math.PI;
+                } else {
+                    const normalizedDeg = 360 + sensorAngleDeg;
+                    targetAngle = (normalizedDeg / 180) * Math.PI;
+                }
+            }
             
-            // 仍然避开边界
-            const boundaryForce = this.calculateBoundaryAvoidance(headPos, canvasWidth, canvasHeight);
-            acceleration = acceleration.add(boundaryForce.mult(this.boundaryWeight));
+            // 计算目标方向向量
+            const targetDirection = Vec2.fromAngle(targetAngle);
+            
+            // 计算当前速度方向
+            let currentAngle;
+            if (this.velocity.mag() > 0.01) {
+                currentAngle = this.velocity.heading();
+            } else {
+                // 如果速度很小，使用头部朝向
+                if (this.spine.joints.length >= 2) {
+                    const headDir = this.spine.joints[0].sub(this.spine.joints[1]);
+                    currentAngle = headDir.heading();
+                } else {
+                    currentAngle = 0;
+                }
+            }
+            
+            // 计算角度差
+            let angleDiff = targetAngle - currentAngle;
+            // 归一化到 [-π, π]
+            while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
+            while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
+            
+            // 调试信息：每0.5秒输出一次（避免刷屏）
+            if (!this._lastDebugTime || Date.now() - this._lastDebugTime > 500) {
+                const currentAngleDeg = (currentAngle * 180 / Math.PI);
+                let targetAngleDeg = (targetAngle * 180 / Math.PI);
+                // 将弧度转换为-180到180度的范围显示
+                if (targetAngleDeg > 180) targetAngleDeg -= 360;
+                const angleDiffDeg = (angleDiff * 180 / Math.PI);
+                const direction = sensorAngleDeg >= 0 ? '左转' : '右转';
+                console.log(`🎯 传感器角度控制调试 (AngX):`);
+                console.log(`   传感器角度: ${sensorAngleDeg.toFixed(1)}° (${direction})`);
+                console.log(`   目标方向: ${targetAngleDeg.toFixed(1)}° (${targetAngle.toFixed(3)} 弧度)`);
+                console.log(`   当前方向: ${currentAngleDeg.toFixed(1)}° (${currentAngle.toFixed(3)} 弧度)`);
+                console.log(`   角度差: ${angleDiffDeg.toFixed(1)}°`);
+                this._lastDebugTime = Date.now();
+            }
+            
+            // 保存调试信息到全局（供 UI 显示）
+            if (!window.sensorAngleDebug) {
+                window.sensorAngleDebug = {};
+            }
+            let targetAngleDeg = (targetAngle * 180 / Math.PI);
+            if (targetAngleDeg > 180) targetAngleDeg -= 360;
+            window.sensorAngleDebug = {
+                sensorAngleDeg: sensorAngleDeg,
+                targetAngleDeg: targetAngleDeg,
+                currentAngleDeg: (currentAngle * 180 / Math.PI),
+                angleDiffDeg: (angleDiff * 180 / Math.PI),
+                targetAngleRad: targetAngle,
+                currentAngleRad: currentAngle,
+                direction: sensorAngleDeg >= 0 ? '左转' : '右转'
+            };
+            
+            // 直接朝向目标方向（更强的控制力）
+            const angleDiffAbs = Math.abs(angleDiff);
+            const turnStrength = Math.min(1, angleDiffAbs / (Math.PI / 3)); // 60度内线性响应
+            
+            // 转向力：垂直于当前速度方向
+            const turnDirection = angleDiff > 0 ? 1 : -1;
+            const perpendicularAngle = currentAngle + (Math.PI / 2) * turnDirection;
+            const turnForce = Vec2.fromAngle(perpendicularAngle).mult(this.maxForce * turnStrength * 3);
+            
+            // 朝向目标方向的吸引力（主要力）
+            const attractionForce = targetDirection.mult(this.maxForce * 2.0);
+            
+            acceleration = acceleration.add(turnForce).add(attractionForce);
         } else {
-            // 自由运动模式
-            const separationForce = this.calculateSeparation(neighbors);
-            const alignmentForce = this.calculateAlignment(sameGroupNeighbors);
-            const cohesionForce = this.calculateCohesion(sameGroupNeighbors);
-            const noiseForce = this.calculateNoiseForce();
-            const circlingForce = this.calculateCircling();
-            const boundaryForce = this.calculateBoundaryAvoidance(headPos, canvasWidth, canvasHeight);
-
-            acceleration = acceleration.add(separationForce.mult(this.separationWeight));
-            acceleration = acceleration.add(alignmentForce.mult(this.alignmentWeight));
-            acceleration = acceleration.add(cohesionForce.mult(this.cohesionWeight));
-            const noiseWeight = this.baseNoiseWeight * eco.noiseMultiplier;
-            acceleration = acceleration.add(noiseForce.mult(noiseWeight));
-            acceleration = acceleration.add(circlingForce.mult(this.circlingWeight));
-            acceleration = acceleration.add(boundaryForce.mult(this.boundaryWeight));
-            
-            // 非玩家鱼受到玩家吸引
-            if (!this.isPlayer) {
-                acceleration = acceleration.add(playerAttractionForce);
+            // 如果没有传感器角度，保持当前方向（最小速度）
+            if (this.velocity.mag() < 0.1) {
+                // 如果速度很小，给一个很小的随机方向
+                const randomAngle = Math.random() * Math.PI * 2;
+                const smallForce = Vec2.fromAngle(randomAngle).mult(this.maxForce * 0.1);
+                acceleration = acceleration.add(smallForce);
             }
         }
+        
+        // 边界躲避（保留，避免鱼游出屏幕）
+        const boundaryForce = this.calculateBoundaryAvoidance(headPos, canvasWidth, canvasHeight);
+        acceleration = acceleration.add(boundaryForce.mult(this.boundaryWeight));
 
         // 应用阻尼和加速度
         this.velocity = this.velocity.mult(0.98).add(acceleration);
@@ -165,12 +193,12 @@ class Fish {
         }
 
         // 最小速度
-        if (this.velocity.mag() < 0.2) {
-            this.velocity = this.velocity.setMag(0.2);
+        if (this.velocity.mag() < 0.2 * SPEED_SCALE) {
+            this.velocity = this.velocity.setMag(0.2 * SPEED_SCALE);
         }
 
         // 使用合理的速度倍数（而不是固定的12）
-        const moveSpeed = 8.0;  // 降低移动速度
+        const moveSpeed = 8.0 * SPEED_SCALE;  // 移动速度
         let newPos = headPos.add(this.velocity.mult(moveSpeed));
         
         // 碰撞检测：检查新位置是否可行走

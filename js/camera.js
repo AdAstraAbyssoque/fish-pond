@@ -15,7 +15,46 @@ class Camera {
         // Debug 模式
         this.debugMode = false;
         this.minZoom = 0.2;  // 可以看到整个 3x3 地图
-        this.maxZoom = 1.5;
+        this.maxZoom = 3.0;  // 提高最大缩放，支持放大2倍
+        
+        // 世界边界（池塘图片尺寸）
+        this.worldBounds = {
+            minX: 0,
+            minY: 0,
+            maxX: Infinity,
+            maxY: Infinity
+        };
+    }
+    
+    // 设置世界边界（池塘图片尺寸）
+    setWorldBounds(minX, minY, maxX, maxY) {
+        this.worldBounds = { minX, minY, maxX, maxY };
+    }
+    
+    // 限制摄像机位置在边界内
+    clampPosition() {
+        // 计算当前视野在世界坐标中的大小
+        const viewWorldWidth = this.viewWidth / this.zoom;
+        const viewWorldHeight = this.viewHeight / this.zoom;
+        
+        // 限制摄像机位置，确保视野不超出池塘边界
+        const minX = this.worldBounds.minX;
+        const minY = this.worldBounds.minY;
+        const maxX = this.worldBounds.maxX - viewWorldWidth;
+        const maxY = this.worldBounds.maxY - viewWorldHeight;
+        
+        // 如果视野大于池塘，居中显示
+        if (viewWorldWidth >= this.worldBounds.maxX) {
+            this.x = (this.worldBounds.minX + this.worldBounds.maxX) / 2 - viewWorldWidth / 2;
+        } else {
+            this.x = Math.max(minX, Math.min(maxX, this.x));
+        }
+        
+        if (viewWorldHeight >= this.worldBounds.maxY) {
+            this.y = (this.worldBounds.minY + this.worldBounds.maxY) / 2 - viewWorldHeight / 2;
+        } else {
+            this.y = Math.max(minY, Math.min(maxY, this.y));
+        }
     }
     
     // 跟随目标（平滑）
@@ -27,6 +66,9 @@ class Camera {
         
         this.x += (targetX - this.x) * smoothness;
         this.y += (targetY - this.y) * smoothness;
+        
+        // 限制摄像机位置在边界内
+        this.clampPosition();
     }
     
     // 设置缩放
@@ -37,6 +79,9 @@ class Camera {
     // 更新缩放（平滑）
     update() {
         this.zoom += (this.targetZoom - this.zoom) * 0.1;
+        
+        // 缩放改变后，重新限制位置（因为视野大小改变了）
+        this.clampPosition();
     }
     
     // 世界坐标转屏幕坐标
