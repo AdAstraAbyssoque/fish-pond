@@ -114,7 +114,7 @@ const SCALE_STORAGE_KEY = 'pondScaleRatio';
 const SCALE_RANGE = { min: 0.05, max: 1.2, default: 0.6 };  // 更大的鱼（60%）
 
 // 粒子与生态模型的基础参数
-const BASE_PARTICLE_SPAWN_RATE = 60000;
+const BASE_PARTICLE_SPAWN_RATE = 28000;
 
 // 生态稳态/传感器状态
 let homeostasis = null;
@@ -233,12 +233,15 @@ class PondHomeostasis {
         );
         const jerk = Math.abs(this.sensor.a);
 
-        // 将加速度映射为动荡度，a 维度提供额外"突发"权重
-        // 如果处于启动保护期，强制动荡度为0
-        // 降低动荡度系数：
-        // magnitude 从 0.06 -> 0.03 (降低对总幅度的敏感度)
-        // jerk 从 0.15 -> 0.08 (降低对突变的敏感度)
-        let agitation = clamp01(magnitude * 0.03 + jerk * 0.08);  // 降低敏感度
+        // 优化动荡度计算：
+        // 1. 使用净加速度 (magnitude - 1)，去除重力常数影响
+        // 2. 这样静止时 netMagnitude ≈ 0，动荡度 ≈ 0
+        const netMagnitude = Math.abs(magnitude - 1.0);
+
+        // 将加速度映射为动荡度
+        // jerk 已经是后端处理过的动态加速度 (dynamic_acc * 50)
+        // magnitude 权重进一步降低，主要靠 netMagnitude 判断
+        let agitation = clamp01(netMagnitude * 0.1 + jerk * 0.05);  
         
         if (this.bootProtectionTime > 0) {
             // 保护期间，忽略所有突增的动荡，强制平稳过渡
@@ -260,26 +263,20 @@ class PondHomeostasis {
         if (isInPanic) {
             this.panicTime += deltaTime;
             
-            // 惊扰超过10秒 → 永久死亡
-            if (this.panicTime >= 10) {
+            // 惊扰超过8秒 → 永久死亡
+            if (this.panicTime >= 8) {
                 this.isPermanentlyDead = true;
                 this.health = 0;
                 this.capacity = 0;
                 console.log('💀 池塘生态系统永久崩溃！惊扰持续时间:', this.panicTime.toFixed(1), '秒');
             }
-            // 惊扰超过2秒 → 鱼开始消失（健康度快速下降）
-            else if (this.panicTime >= 2) {
-                const deathProgress = Math.min(1, (this.panicTime - 2) / 2);  // 2-4秒内逐渐消失
-                this.health = Math.max(0, 1 - deathProgress);
-                if (this.panicTime === Math.floor(this.panicTime)) {
-                    console.log('⚠️ 惊扰已持续', Math.floor(this.panicTime), '秒，鱼群健康度:', (this.health * 100).toFixed(0) + '%');
-                }
-            }
+            // 注意：这里不再粗暴地直接降低全局 health，改为在 getFishIntegrity 中计算个体可见度
+            // 只有当动荡极度持久时，才缓慢通过 collapseDebt 影响全局 capacity
         } else {
             // 不在惊扰状态时，缓慢恢复计时器，模拟鱼群慢慢游回来的过程（约20秒恢复）
-            // 如果 panicTime 到了 4s (完全消失)，以 0.2 的速度衰减，
-            // 回到 2s (开始出现) 需要 10s，再回到 0s (完全正常) 需要 10s。
-            this.panicTime = Math.max(0, this.panicTime - deltaTime * 0.25);
+            // 恢复速度取决于当前的环境平稳度，如果很平稳，恢复得稍微快一点点
+            const recoverySpeed = 0.35 * (1 - this.panic); 
+            this.panicTime = Math.max(0, this.panicTime - deltaTime * recoverySpeed);
         }
 
         // 稳态越高，恢复力越强；动荡越高，稳态越低
@@ -287,20 +284,20 @@ class PondHomeostasis {
         this.stability = damp(this.stability, stabilityTarget, 2.5, deltaTime);  // 中等恢复速度
 
         // 恢复与伤害，结合稳态与动荡
-        const damage = (0.25 + this.collapseDebt * 0.4) * Math.pow(this.panic, 1.3);  // 适中的伤害
+        const damage = (0.1 + this.collapseDebt * 0.4) * Math.pow(this.panic, 1.5);
         const recovery = Math.max(0, this.stability - this.health) *
-            (0.7 * this.capacity) *  // 中等恢复速度
-            (1 - this.panic * 0.5);  // 适中的 panic 抑制
+            (0.5 * this.capacity) * 
+            (1 - this.panic * 0.8);
         this.health = clamp01(this.health + (recovery - damage) * deltaTime);
 
         // 低于阈值后触发承载力衰减（降低阈值，减缓衰减速度）
-        if (this.health < 0.15) {  // 从 0.24 降到 0.15，更难触发
+        if (this.health < 0.1) {
             this.collapseDebt = clamp01(this.collapseDebt + (0.05 + this.panic * 0.2) * deltaTime);  // 减缓衰减
             this.capacity = Math.max(0.5, 1 - this.collapseDebt);  // 提高最低承载力
         }
 
-        const fishIntegrity = clamp01(this.health * this.capacity * (1 - this.panic * 0.25));
-        const particleMultiplier = clamp01(0.28 + fishIntegrity * 0.9);
+        const fishIntegrity = clamp01(this.health * this.capacity); // 这里只计算基础值，具体每条鱼在 getFishIntegrity 中算
+        const particleMultiplier = clamp01(0.5 + fishIntegrity * 0.5);
 
         return {
             sensor: this.sensor,
@@ -317,21 +314,42 @@ class PondHomeostasis {
         };
     }
 
-    getFishIntegrity(offset = 0) {
+    // 计算单条鱼的完整度（可见度）
+    // sensitivity: -0.5 (胆小) 到 0.5 (胆大)
+    getFishIntegrity(sensitivity = 0) {
         // 如果永久死亡，返回0
         if (this.isPermanentlyDead) {
             return 0;
         }
         
-        // 惊扰超过2秒后，完整度快速下降（这是鱼群消失的效果，保留）
-        if (this.panicTime >= 2) {
-            const deathProgress = Math.min(1, (this.panicTime - 2) / 2);  // 2-4秒内从1降到0
-            return Math.max(0, 1 - deathProgress);
+        // 基础健康度（受系统健康和承载力影响）
+        const baseHealth = clamp01(this.health * this.capacity);
+        
+        // 个体差异化消失逻辑：
+        // 1. 惊扰阈值：胆小的鱼(sensitivity < 0)阈值低，更早开始消失
+        //    基础阈值 1.5s，差异 +/- 1.0s => 范围 0.5s ~ 2.5s
+        const vanishThreshold = 1.5 + sensitivity * 2.0;
+        
+        // 2. 消失过程持续时间：胆大的鱼消失得慢一点
+        //    基础 3.0s，差异 +/- 1.0s => 范围 2.0s ~ 4.0s
+        const vanishDuration = 3.0 + sensitivity * 1.0;
+        
+        // 如果还没有达到该鱼的惊扰阈值，它就是完全可见的
+        if (this.panicTime < vanishThreshold) {
+            return Math.max(0.2, baseHealth);
         }
         
-        // 只有健康度和承载力影响完整度，移除瞬时 panic 的影响
-        const base = clamp01(this.health * this.capacity); 
-        return Math.max(0.2, clamp01(base * (1 + offset)));
+        // 计算消失进度 (0.0 -> 1.0)
+        const progress = clamp01((this.panicTime - vanishThreshold) / vanishDuration);
+        
+        // 随着进度增加，可见度降低
+        // 即使完全消失，也保留极少量的影子(0.05)，除非 panicTime 极大
+        let visibility = 1.0 - progress;
+        
+        // 如果 panicTime 极大（超过10秒），彻底消失
+        if (this.panicTime > 10) visibility = 0;
+        
+        return Math.max(0, visibility * baseHealth);
     }
 
     getParticleMultiplier() {
@@ -987,8 +1005,8 @@ function initPond() {
     fishLastPositions.clear();
     activeRipples = [];
 
-    // 在地图中创建约 8-12 条鱼（极少数量，高性能，高画质）
-    const fishCount = 8 + Math.floor(Math.random() * 5);
+    // 在地图中创建 7 条鱼 (5 + 2)
+    const fishCount = 7;
     const positions = [];
     
     // 全地图随机分布生成
@@ -1041,7 +1059,7 @@ function initPond() {
         fish.separationRadius = 110; // 稍微减小分离半径，允许更紧密
         fish.alignmentRadius = 180;
         fish.cohesionRadius = 220;
-        fish.maxSpeed = (0.6 + Math.random() * 0.3) * 0.67 * 0.5; // 速度减慢1/3后再减慢1/2（恢复原值）
+        fish.maxSpeed = (0.6 + Math.random() * 0.3) * 0.67 * 0.5 * 1.2; // 速度增加 1.2 倍
         fish.baseMaxSpeed = fish.maxSpeed; // 动态动荡放大/回落时以当前速度为基准
         fish.maxForce = 0.03;
         fish.separationWeight = 2.0;
@@ -1053,7 +1071,15 @@ function initPond() {
         fish.boundaryWeight = 2.0;
         fish.noiseScale = 0.003;
         fish.circlingDirection = Math.random() < 0.5 ? 1 : -1;
-        fish.ecoSensitivity = (Math.random() - 0.5) * 0.3; // 个体对生态波动的敏感度差异
+        
+        if (fish.isPlayer) {
+            // 橙色鱼（玩家鱼）是“鱼王”，胆子最大，最后消失
+            // sensitivity = 2.0，意味着它的惊扰阈值会比普通鱼高很多（1.5 + 4.0 = 5.5秒）
+            fish.ecoSensitivity = 2.0;
+        } else {
+            // 普通鱼：增大个体差异范围 (-0.5 到 0.5)，使鱼群消失时间明显错开
+            fish.ecoSensitivity = (Math.random() - 0.5) * 1.0; 
+        }
         
         fishes.push(fish);
         

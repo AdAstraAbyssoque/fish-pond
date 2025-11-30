@@ -72,10 +72,17 @@ def updateData(DeviceModel):
     # 计算加速度向量的模（总强度）
     magnitude = math.sqrt(accX**2 + accY**2 + accZ**2)
     
-    # 根据加速度大小判断阶段（维持高阈值设置）
-    if magnitude < 1.8:
+    # 计算动态加速度（去除重力分量 1.0g）
+    # 这样静止时 dynamic_acc 为 0，摇晃时才会增加
+    dynamic_acc = abs(magnitude - 1.0)
+    
+    # 根据加速度大小判断阶段
+    # 降低阈值到原来的 30%
+    # 静水: < 1.8 * 0.3 = 0.54
+    # 微扰: < 3.5 * 0.3 = 1.05
+    if magnitude < 0.54:
         phase = "静水"
-    elif magnitude < 3.5:
+    elif magnitude < 1.05:
         phase = "微扰"
     else:
         phase = "惊扰"
@@ -89,7 +96,7 @@ def updateData(DeviceModel):
         "x": accX,
         "y": accY,
         "z": accZ,
-        "a": magnitude * 25,
+        "a": dynamic_acc * 50, # 将动态加速度放大，作为 jerk/动荡值传递
         "magnitude": magnitude,
         "phase": phase,
         # 角度数据（只传 AngX）
@@ -97,7 +104,7 @@ def updateData(DeviceModel):
         "angle": angX,
     }
     
-    print(f"加速度: ({accX:.2f}, {accY:.2f}, {accZ:.2f}) | 强度: {magnitude:.2f}g | 状态: {phase} | 角度: AngX={angX:.1f}°")
+    print(f"加速度: ({accX:.2f}, {accY:.2f}, {accZ:.2f}) | 强度: {magnitude:.2f}g | 动态: {dynamic_acc:.2f}g | 状态: {phase}")
     
     # 广播数据给所有连接的客户端
     asyncio.create_task(broadcast_data())

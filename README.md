@@ -157,11 +157,11 @@ npm run dev
 ### 粒子系统配置 (`main.js`)
 ```javascript
 particleSystem = new SimpleReglParticles(regl, {
-    particleCount: 60000,      // 最大粒子数
+    particleCount: 28000,      // 最大粒子数
     lifeSpan: 0.12,            // 粒子生命周期（秒）
     sizeRange: [1.5, 2.5],      // 粒子大小范围
     speedRange: [0.15, 0.8],    // 粒子速度范围
-    spawnRate: 20000,          // 每秒生成粒子数
+    spawnRate: 12000,          // 每秒生成粒子数
     colorStart: [1.0, 0.4, 0.2, 0.98],  // 起始颜色（RGBA）
     colorEnd: [1.0, 0.6, 0.3, 0.0]      // 结束颜色（RGBA）
 });
