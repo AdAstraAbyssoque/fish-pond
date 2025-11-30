@@ -114,7 +114,7 @@ const SCALE_STORAGE_KEY = 'pondScaleRatio';
 const SCALE_RANGE = { min: 0.05, max: 1.2, default: 0.6 };  // 更大的鱼（60%）
 
 // 粒子与生态模型的基础参数
-const BASE_PARTICLE_SPAWN_RATE = 28000;
+const BASE_PARTICLE_SPAWN_RATE = 60000;
 
 // 生态稳态/传感器状态
 let homeostasis = null;
@@ -192,6 +192,9 @@ class PondHomeostasis {
         // 惊扰计时器
         this.panicTime = 0;           // 累计惊扰时间
         this.isPermanentlyDead = false; // 是否永久死亡
+        
+        // 启动保护：前3秒内强制忽略所有动荡
+        this.bootProtectionTime = 3.0;
     }
 
     receiveSensor(vector) {
@@ -199,6 +202,13 @@ class PondHomeostasis {
     }
 
     step(deltaTime) {
+        // 启动保护倒计时
+        if (this.bootProtectionTime > 0) {
+            this.bootProtectionTime -= deltaTime;
+            // 保护期间如果传感器数据正常，可以提前结束保护
+            // 如果数据异常（magnitude很大），则强制压制
+        }
+
         // 如果已经永久死亡，直接返回死亡状态
         if (this.isPermanentlyDead) {
             return {
@@ -224,11 +234,28 @@ class PondHomeostasis {
         const jerk = Math.abs(this.sensor.a);
 
         // 将加速度映射为动荡度，a 维度提供额外"突发"权重
-        const agitation = clamp01(magnitude * 0.06 + jerk * 0.15);  // 适中的敏感度
-        this.panic = damp(this.panic, agitation, 3.8, deltaTime);  // 中等阻尼，反应明显但不过激
+        // 如果处于启动保护期，强制动荡度为0
+        // 降低动荡度系数：
+        // magnitude 从 0.06 -> 0.03 (降低对总幅度的敏感度)
+        // jerk 从 0.15 -> 0.08 (降低对突变的敏感度)
+        let agitation = clamp01(magnitude * 0.03 + jerk * 0.08);  // 降低敏感度
+        
+        if (this.bootProtectionTime > 0) {
+            // 保护期间，忽略所有突增的动荡，强制平稳过渡
+            agitation = 0;
+            // 同时重置传感器状态，防止phase卡在'惊扰'
+            if (this.sensor.phase === '惊扰') {
+                this.sensor.phase = '静水';
+            }
+        }
+
+        // 增加阻尼，让数值上升更慢
+        // 3.8 -> 2.0 (更慢的上升速度)
+        this.panic = damp(this.panic, agitation, 2.0, deltaTime);
         
         // 判断是否处于惊扰状态（phase 为 "惊扰"）
-        const isInPanic = this.sensor.phase === '惊扰';
+        // 同样受启动保护影响
+        const isInPanic = this.sensor.phase === '惊扰' && this.bootProtectionTime <= 0;
         
         if (isInPanic) {
             this.panicTime += deltaTime;
@@ -249,8 +276,10 @@ class PondHomeostasis {
                 }
             }
         } else {
-            // 不在惊扰状态时，重置计时器
-            this.panicTime = Math.max(0, this.panicTime - deltaTime * 2);  // 快速衰减
+            // 不在惊扰状态时，缓慢恢复计时器，模拟鱼群慢慢游回来的过程（约20秒恢复）
+            // 如果 panicTime 到了 4s (完全消失)，以 0.2 的速度衰减，
+            // 回到 2s (开始出现) 需要 10s，再回到 0s (完全正常) 需要 10s。
+            this.panicTime = Math.max(0, this.panicTime - deltaTime * 0.25);
         }
 
         // 稳态越高，恢复力越强；动荡越高，稳态越低
@@ -294,20 +323,28 @@ class PondHomeostasis {
             return 0;
         }
         
-        // 惊扰超过2秒后，完整度快速下降
+        // 惊扰超过2秒后，完整度快速下降（这是鱼群消失的效果，保留）
         if (this.panicTime >= 2) {
             const deathProgress = Math.min(1, (this.panicTime - 2) / 2);  // 2-4秒内从1降到0
             return Math.max(0, 1 - deathProgress);
         }
         
-        const base = clamp01(this.health * this.capacity * (1 - this.panic * 0.35));
+        // 只有健康度和承载力影响完整度，移除瞬时 panic 的影响
+        const base = clamp01(this.health * this.capacity); 
         return Math.max(0.2, clamp01(base * (1 + offset)));
     }
 
     getParticleMultiplier() {
-        const base = clamp01(this.health * this.capacity);
-        const panicLoss = 0.25 + this.panic * 0.55;
-        return clamp01(0.25 + base * (1 - panicLoss * 0.6));
+        // 粒子生成倍率：
+        // 只要没有永久死亡，且不在消失过程中（panicTime < 2），就始终保持满倍率生成
+        // 确保视觉上鱼始终是实心的，不会因为微小的健康度波动而闪烁
+        if (this.isPermanentlyDead) return 0;
+        if (this.panicTime >= 2) {
+             // 消失过程中，生成率随健康度下降
+             return clamp01(this.health * this.capacity);
+        }
+        // 正常状态满倍率
+        return 1.0; 
     }
 }
 
@@ -389,6 +426,14 @@ function createRealAccelerometerStream() {
             ws.onopen = () => {
                 console.log('✅ 传感器已连接');
                 isConnected = true;
+                
+                // 重置稳态模型的启动保护，防止刚连接时的突发数据导致动荡
+                if (homeostasis) {
+                    homeostasis.bootProtectionTime = 3.0;
+                    homeostasis.panic = 0;
+                    homeostasis.sensor.phase = '静水';
+                    console.log('🛡️ 传感器连接，启动动荡保护 (3s)');
+                }
                 
                 // 显示连接状态
                 const statusDiv = document.getElementById('sensor-status');
@@ -942,60 +987,37 @@ function initPond() {
     fishLastPositions.clear();
     activeRipples = [];
 
-    // 在地图中创建约 20-24 条鱼
-    const fishCount = 20 + Math.floor(Math.random() * 5); // 20-24条
+    // 在地图中创建约 8-12 条鱼（极少数量，高性能，高画质）
+    const fishCount = 8 + Math.floor(Math.random() * 5);
     const positions = [];
     
-    // 在地图中生成均匀分布的群组中心（使用 3x3 网格）
-    const gridSize = 3;
-    const tileWidth = WORLD_WIDTH / gridSize;
-    const tileHeight = WORLD_HEIGHT / gridSize;
-    const groupCenters = [];
-    for (let gx = 0; gx < gridSize; gx++) {
-        for (let gy = 0; gy < gridSize; gy++) {
-            groupCenters.push({
-                x: (gx + 0.5) * tileWidth,
-                y: (gy + 0.5) * tileHeight
-            });
-        }
-    }
-    
-    // 为每条鱼找位置
+    // 全地图随机分布生成
     for (let i = 0; i < fishCount; i++) {
         let attempts = 0;
         let positionFound = false;
         
-        while (!positionFound && attempts < 100) {
+        while (!positionFound && attempts < 200) {
             attempts++;
             
-            // 围绕群组中心生成位置
-            const groupIndex = i % groupCenters.length;
-            const center = groupCenters[groupIndex];
-            const angle = Math.random() * Math.PI * 2;
-            const radius = Math.random() * (Math.min(tileWidth, tileHeight) * 0.35);
-            
-            const pos = {
-                x: center.x + Math.cos(angle) * radius,
-                y: center.y + Math.sin(angle) * radius
-            };
-            
-            // 世界边界检查
+            // 随机位置（保留边距）
             const margin = 300;
-            pos.x = Math.max(margin, Math.min(WORLD_WIDTH - margin, pos.x));
-            pos.y = Math.max(margin, Math.min(WORLD_HEIGHT - margin, pos.y));
+            const pos = {
+                x: margin + Math.random() * (WORLD_WIDTH - 2 * margin),
+                y: margin + Math.random() * (WORLD_HEIGHT - 2 * margin)
+            };
             
             // 检查是否在可通行区域（碰撞检测）
             if (window.isPositionWalkable && !window.isPositionWalkable(pos.x, pos.y)) {
                 continue; // 不在可通行区域，跳过
             }
             
-            // 检查与其他鱼的距离
+            // 检查与其他鱼的距离（稍微放宽限制以允许更多鱼）
             let valid = true;
             for (let existing of positions) {
                 const dx = pos.x - existing.x;
                 const dy = pos.y - existing.y;
                 const dist = Math.sqrt(dx * dx + dy * dy);
-                if (dist < 150) {  // 减小最小距离以容纳更多鱼
+                if (dist < 100) {  // 减小最小距离（原150）
                     valid = false;
                     break;
                 }
@@ -1012,11 +1034,11 @@ function initPond() {
     positions.forEach((pos, idx) => {
         const fishType = idx === 0 ? 'orange' : 'white';
         const fish = new Fish(new Vec2(pos.x, pos.y), fishType, pondScale);
-        fish.groupId = idx % groupCenters.length;
+        fish.groupId = 0; // 不再使用群组
         fish.selected = idx === 0;
         fish.isPlayer = idx === 0;  // 标记玩家鱼
         
-        fish.separationRadius = 130;
+        fish.separationRadius = 110; // 稍微减小分离半径，允许更紧密
         fish.alignmentRadius = 180;
         fish.cohesionRadius = 220;
         fish.maxSpeed = (0.6 + Math.random() * 0.3) * 0.67 * 0.5; // 速度减慢1/3后再减慢1/2（恢复原值）
@@ -1117,7 +1139,7 @@ function bootstrap() {
         console.log('初始化粒子系统（视野自适应）...');
         particleSystem = new SimpleReglParticles(regl, {
             canvas: particleCanvas,
-            particleCount: 90000,     // 提高上限，避免低点数显格子
+            particleCount: 300000,     // 提高上限，避免低点数显格子
             lifeSpan: 0.12,
             sizeRange: [1.5, 2.5],
             speedRange: [0.15, 0.8],
@@ -1274,10 +1296,15 @@ function animate(currentTime) {
     }
     const ecoModifiers = getEcoModifiers(lastEcosystemSnapshot);
     
-    // ===== 2. 更新所有鱼（只由传感器角度控制） =====
+    // ===== 2. 更新所有鱼 =====
     for (let fish of fishes) {
-        // 移除玩家控制，所有鱼都只受传感器角度控制
-        fish.resolve(fishes, deltaTime, WORLD_WIDTH, WORLD_HEIGHT, null, null, ecoModifiers);
+        // 只有橙色鱼（玩家鱼）受传感器角度控制
+        // 其他白色鱼只受环境动荡影响（速度/消失），方向完全自由/随机
+        const modifiersForThisFish = fish.isPlayer 
+            ? ecoModifiers 
+            : { ...ecoModifiers, sensorAngle: null }; // 移除白色鱼的传感器角度控制
+            
+        fish.resolve(fishes, deltaTime, WORLD_WIDTH, WORLD_HEIGHT, null, null, modifiersForThisFish);
     }
     
     // ===== 3. 摄像机跟随玩家鱼 =====
@@ -1376,6 +1403,18 @@ function animate(currentTime) {
         for (let fish of visibleFishes) {
             const integrity = homeostasis ? homeostasis.getFishIntegrity(fish.ecoSensitivity) : 1;
             
+            // 检测消失事件：如果之前可见，现在几乎不可见，触发大涟漪
+            if (fish.lastIntegrity > 0.1 && integrity <= 0.1) {
+                const head = fish.spine.joints[0];
+                const ripple = new Ripple(head.x, head.y);
+                ripple.maxRadius = 300; // 更大的涟漪
+                ripple.speed = 250;     // 更快的扩散
+                ripple.lifespan = 3.0;  // 持续更久
+                activeRipples.push(ripple);
+            }
+            // 更新上一帧完整度
+            fish.lastIntegrity = integrity;
+            
             // 如果完整度为0（永久死亡或惊扰>4秒），跳过这条鱼
             if (integrity <= 0) {
                 continue;
@@ -1385,8 +1424,18 @@ function animate(currentTime) {
             // 惊扰状态下鱼会根据时间逐渐消失
             const vividBoost = ecoModifiers.vividBoost || 1;
 
+            // 优化采样密度逻辑：
+            // 只有当完整度非常低（< 0.5，即鱼快消失了）时，才开始降低采样密度
+            // 正常状态下始终保持最高密度（baseDensity），确保画质
             const baseDensity = debugMode ? 3 : 1;
-            const variableDensity = Math.max(baseDensity, Math.round(baseDensity + (1 - effectiveIntegrity) * 5));
+            let variableDensity = baseDensity;
+            
+            if (effectiveIntegrity < 0.5) {
+                // 当完整度低于 0.5 时，密度从 1 逐渐增加到 6
+                // 0.5 -> 1, 0.0 -> 6
+                variableDensity = Math.max(baseDensity, Math.round(baseDensity + (0.5 - effectiveIntegrity) * 10));
+            }
+            
             const points = fish.sampleBodyPointsFromImage(offscreenCtx, variableDensity);
             let filteredPoints = points;
 

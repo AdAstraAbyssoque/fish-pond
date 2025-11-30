@@ -3,7 +3,7 @@
 class SimpleReglParticles {
     constructor(reglInstance, options = {}) {
         this.regl = reglInstance;
-        this.maxParticles = options.particleCount || 1000;
+        this.maxParticles = options.particleCount || 300000;
         this.canvas = options.canvas;
         
         this.config = {
@@ -15,7 +15,7 @@ class SimpleReglParticles {
         };
         
         this.particles = [];
-        this.spawnRate = options.spawnRate || 100;
+        this.spawnRate = options.spawnRate || 2000;
         this.spawnAccumulator = 0;
         this.time = 0;
         

@@ -58,6 +58,18 @@ class Fish {
 
         this.baseMaxSpeed = this.maxSpeed;
         this.baseNoiseWeight = this.noiseWeight;
+        
+        // 个性化偏差：每条鱼对传感器角度有一个固定的随机偏差（+/- 25度）
+        // 这样即使传感器给所有鱼同一个指令，它们也不会完全平行游动
+        this.sensorAngleOffset = (Math.random() - 0.5) * (Math.PI / 3.6); 
+
+        // 记录上一帧的完整度，用于检测消失事件
+        this.lastIntegrity = 1.0;
+
+        // 临时结群机制
+        this.schoolingTimer = 0;       // 剩余结群时间
+        this.schoolingCooldown = 0;    // 结群冷却时间
+        this.isSchooling = false;
     }
 
     resolve(otherFish, deltaTime, canvasWidth, canvasHeight, playerControl = null, playerFish = null, ecoModifiers = null) {
@@ -65,11 +77,60 @@ class Fish {
         this.noiseTime += deltaTime;
         const eco = ecoModifiers || { speedMultiplier: 1, noiseMultiplier: 1, boundarySlowdown: 1 };
 
-        // 移除所有集群行为和玩家吸引力，只保留传感器角度控制
+        // 更新结群状态
+        if (this.schoolingCooldown > 0) {
+            this.schoolingCooldown -= deltaTime;
+        }
+
+        if (this.isSchooling) {
+            this.schoolingTimer -= deltaTime;
+            if (this.schoolingTimer <= 0) {
+                this.isSchooling = false;
+                this.schoolingCooldown = 15 + Math.random() * 25; // 15-40秒冷却
+                // console.log('🐟 结束结群，进入冷却');
+            }
+        } else {
+            // 如果不在冷却且不在结群，有机会开始结群
+            if (this.schoolingCooldown <= 0 && Math.random() < 0.002) { // 约每8秒检查一次 (60fps)
+                this.isSchooling = true;
+                this.schoolingTimer = 5 + Math.random() * 10; // 5-15秒结群
+                // console.log('🐟 开始临时结群！时长:', this.schoolingTimer.toFixed(1));
+            }
+        }
 
         let acceleration = new Vec2(0, 0);
         
-        // 传感器角度控制（唯一控制方式）
+        // 1. 始终添加一点自然游动的噪音力，让它们看起来更自由
+        const noiseForce = this.calculateNoiseForce();
+        acceleration = acceleration.add(noiseForce.mult(this.noiseWeight * (eco.noiseMultiplier || 1)));
+        
+        // 2. 邻居查找（用于分离和结群）
+        // 优化：只在需要时计算邻居
+        const neighbors = [];
+        const checkRadius = Math.max(this.separationRadius, this.cohesionRadius);
+        for (let other of otherFish) {
+            if (other !== this) {
+                // Vec2 没有 dist 方法，使用 sub().mag() 代替
+                const d = headPos.sub(other.spine.joints[0]).mag();
+                if (d < checkRadius) {
+                    neighbors.push({ fish: other, distance: d });
+                }
+            }
+        }
+
+        // 3. 分离力 (Separation) - 始终保持，避免重叠
+        // 稍微降低权重，允许偶尔靠近
+        const separation = this.calculateSeparation(neighbors).mult(this.separationWeight * 0.8);
+        acceleration = acceleration.add(separation);
+
+        // 4. 结群力 (Cohesion & Alignment) - 仅在结群状态下生效
+        if (this.isSchooling) {
+            const alignment = this.calculateAlignment(neighbors).mult(this.alignmentWeight);
+            const cohesion = this.calculateCohesion(neighbors).mult(this.cohesionWeight);
+            acceleration = acceleration.add(alignment).add(cohesion);
+        }
+
+        // 5. 传感器角度控制（主要驱动力）
         if (ecoModifiers && ecoModifiers.sensorAngle !== null && ecoModifiers.sensorAngle !== undefined) {
             // 传感器角度：AngX
             // AngX 0-180度 → 鱼左转0-180度（映射到0-π弧度）
@@ -100,8 +161,9 @@ class Fish {
                 }
             }
             
-            // 计算目标方向向量
-            const targetDirection = Vec2.fromAngle(targetAngle);
+            // 计算目标方向向量（加入个性化偏差）
+            const finalTargetAngle = targetAngle + this.sensorAngleOffset;
+            const targetDirection = Vec2.fromAngle(finalTargetAngle);
             
             // 计算当前速度方向
             let currentAngle;
@@ -118,7 +180,7 @@ class Fish {
             }
             
             // 计算角度差
-            let angleDiff = targetAngle - currentAngle;
+            let angleDiff = finalTargetAngle - currentAngle;
             // 归一化到 [-π, π]
             while (angleDiff > Math.PI) angleDiff -= 2 * Math.PI;
             while (angleDiff < -Math.PI) angleDiff += 2 * Math.PI;
@@ -126,16 +188,18 @@ class Fish {
             // 调试信息：每0.5秒输出一次（避免刷屏）
             if (!this._lastDebugTime || Date.now() - this._lastDebugTime > 500) {
                 const currentAngleDeg = (currentAngle * 180 / Math.PI);
-                let targetAngleDeg = (targetAngle * 180 / Math.PI);
+                let targetAngleDeg = (finalTargetAngle * 180 / Math.PI);
                 // 将弧度转换为-180到180度的范围显示
                 if (targetAngleDeg > 180) targetAngleDeg -= 360;
                 const angleDiffDeg = (angleDiff * 180 / Math.PI);
                 const direction = sensorAngleDeg >= 0 ? '左转' : '右转';
+                /*
                 console.log(`🎯 传感器角度控制调试 (AngX):`);
                 console.log(`   传感器角度: ${sensorAngleDeg.toFixed(1)}° (${direction})`);
-                console.log(`   目标方向: ${targetAngleDeg.toFixed(1)}° (${targetAngle.toFixed(3)} 弧度)`);
+                console.log(`   目标方向: ${targetAngleDeg.toFixed(1)}° (${finalTargetAngle.toFixed(3)} 弧度)`);
                 console.log(`   当前方向: ${currentAngleDeg.toFixed(1)}° (${currentAngle.toFixed(3)} 弧度)`);
                 console.log(`   角度差: ${angleDiffDeg.toFixed(1)}°`);
+                */
                 this._lastDebugTime = Date.now();
             }
             
@@ -143,14 +207,14 @@ class Fish {
             if (!window.sensorAngleDebug) {
                 window.sensorAngleDebug = {};
             }
-            let targetAngleDeg = (targetAngle * 180 / Math.PI);
+            let targetAngleDeg = (finalTargetAngle * 180 / Math.PI);
             if (targetAngleDeg > 180) targetAngleDeg -= 360;
             window.sensorAngleDebug = {
                 sensorAngleDeg: sensorAngleDeg,
                 targetAngleDeg: targetAngleDeg,
                 currentAngleDeg: (currentAngle * 180 / Math.PI),
                 angleDiffDeg: (angleDiff * 180 / Math.PI),
-                targetAngleRad: targetAngle,
+                targetAngleRad: finalTargetAngle,
                 currentAngleRad: currentAngle,
                 direction: sensorAngleDeg >= 0 ? '左转' : '右转'
             };
@@ -165,11 +229,13 @@ class Fish {
             const turnForce = Vec2.fromAngle(perpendicularAngle).mult(this.maxForce * turnStrength * 3);
             
             // 朝向目标方向的吸引力（主要力）
-            const attractionForce = targetDirection.mult(this.maxForce * 2.0);
+            // 降低一点吸引力，让 NoiseForce 更明显
+            const attractionForce = targetDirection.mult(this.maxForce * 1.5);
             
             acceleration = acceleration.add(turnForce).add(attractionForce);
         } else {
             // 如果没有传感器角度，保持当前方向（最小速度）
+            // 此时 NoiseForce 已经是主要动力
             if (this.velocity.mag() < 0.1) {
                 // 如果速度很小，给一个很小的随机方向
                 const randomAngle = Math.random() * Math.PI * 2;
