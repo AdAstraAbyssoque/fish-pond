@@ -70,6 +70,9 @@ class Fish {
         this.schoolingTimer = 0;       // 剩余结群时间
         this.schoolingCooldown = 0;    // 结群冷却时间
         this.isSchooling = false;
+        
+        // 死亡快照（鲸落）
+        this.deadSnapshot = null;
     }
 
     resolve(otherFish, deltaTime, canvasWidth, canvasHeight, playerControl = null, playerFish = null, ecoModifiers = null) {

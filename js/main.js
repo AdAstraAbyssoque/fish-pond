@@ -369,7 +369,7 @@ class PondHomeostasis {
 // ============= 加速度数据流 =============
 
 // 配置：连接到真实传感器后端（BWT901BLE5.0）
-const USE_REAL_SENSOR = true;  // true=真实传感器后端, false=模拟数据
+const USE_REAL_SENSOR = false;  // true=真实传感器后端, false=模拟数据
 const WEBSOCKET_URL = 'ws://localhost:8765';  // Python WebSocket 服务器地址
 
 // 模拟一个"Python 后端"源源推送四维加速度（x, y, z, a）
@@ -1361,6 +1361,22 @@ function animate(currentTime) {
     if (backgroundImage && backgroundImage.complete) {
         ctx.save();
         
+        // 应用惊扰滤镜：背景变暗淡、灰度
+        if (homeostasis) {
+            const panic = homeostasis.panic; // 0-1
+            // 只有当惊扰程度明显时才应用，节省性能
+            if (panic > 0.05) {
+                // 灰度增加 (0 -> 100%)
+                const grayscale = Math.min(100, panic * 120); 
+                // 亮度降低 (100% -> 60%)
+                const brightness = Math.max(60, 100 - panic * 40);
+                // 对比度略微降低 (100% -> 90%)
+                const contrast = Math.max(90, 100 - panic * 10);
+                
+                ctx.filter = `grayscale(${grayscale}%) brightness(${brightness}%) contrast(${contrast}%)`;
+            }
+        }
+        
         // 背景固定在世界坐标 (0, 0) 到 (WORLD_WIDTH, WORLD_HEIGHT)
         // 使用 worldToScreen 转换，这样背景会固定在世界坐标中，跟随缩放
         const topLeftScreen = camera.worldToScreen(0, 0);
@@ -1438,56 +1454,91 @@ function animate(currentTime) {
                 ripple.lifespan = 3.0;  // 持续更久
                 activeRipples.push(ripple);
             }
-            // 更新上一帧完整度
-            fish.lastIntegrity = integrity;
             
-            // 如果完整度为0（永久死亡或惊扰>4秒），跳过这条鱼
-            if (integrity <= 0) {
-                continue;
-            }
+            let currentPoints = [];
+            let isWhaleFall = false;
             
-            const effectiveIntegrity = fish.isPlayer ? Math.max(integrity, 0.3) : integrity;
             // 惊扰状态下鱼会根据时间逐渐消失
+            const ecoModifiers = getEcoModifiers(lastEcosystemSnapshot);
             const vividBoost = ecoModifiers.vividBoost || 1;
 
-            // 优化采样密度逻辑：
-            // 只有当完整度非常低（< 0.5，即鱼快消失了）时，才开始降低采样密度
-            // 正常状态下始终保持最高密度（baseDensity），确保画质
-            const baseDensity = debugMode ? 3 : 1;
-            let variableDensity = baseDensity;
-            
-            if (effectiveIntegrity < 0.5) {
-                // 当完整度低于 0.5 时，密度从 1 逐渐增加到 6
-                // 0.5 -> 1, 0.0 -> 6
-                variableDensity = Math.max(baseDensity, Math.round(baseDensity + (0.5 - effectiveIntegrity) * 10));
-            }
-            
-            const points = fish.sampleBodyPointsFromImage(offscreenCtx, variableDensity);
-            let filteredPoints = points;
+            // 处理鲸落逻辑
+            if (integrity <= 0) {
+                // 如果是刚死且没有快照，生成快照
+                if (!fish.deadSnapshot) {
+                    // 强制采样一次作为尸体（鲸落）
+                    // 使用较高的密度(2)，保持形态清晰
+                    const points = fish.sampleBodyPointsFromImage(offscreenCtx, 2);
+                    fish.deadSnapshot = points.map(p => ({
+                        ...p,
+                        isDead: true
+                    }));
+                }
+                
+                // 使用尸体快照
+                if (fish.deadSnapshot) {
+                    currentPoints = fish.deadSnapshot;
+                    isWhaleFall = true;
+                }
+                // 如果采样失败(空数组)，则 currentPoints 为空，后面会自动处理
+            } else {
+                // 复活/正常状态：如果有快照，清除它
+                if (fish.deadSnapshot) {
+                    fish.deadSnapshot = null;
+                }
+                
+                const effectiveIntegrity = fish.isPlayer ? Math.max(integrity, 0.3) : integrity;
 
-            if (effectiveIntegrity < 0.9) {
-                const keepChance = effectiveIntegrity;
-                filteredPoints = points.filter(() => Math.random() < keepChance);
-            }
+                // 优化采样密度逻辑：
+                const baseDensity = debugMode ? 3 : 1;
+                let variableDensity = baseDensity;
+                
+                if (effectiveIntegrity < 0.5) {
+                    variableDensity = Math.max(baseDensity, Math.round(baseDensity + (0.5 - effectiveIntegrity) * 10));
+                }
+                
+                currentPoints = fish.sampleBodyPointsFromImage(offscreenCtx, variableDensity);
+                
+                // 完整度低时随机丢弃点
+                if (effectiveIntegrity < 0.9) {
+                    const keepChance = effectiveIntegrity;
+                    currentPoints = currentPoints.filter(() => Math.random() < keepChance);
+                }
 
-            // 贴边时在高动荡下加速消散：减少保留粒子
-            if (window.isPositionWalkable && ecoModifiers.boundarySlowdown < 1) {
-                const head = fish.spine.joints[0];
-                const probe = window.isPositionWalkable(head.x, head.y) && !window.isPositionWalkable(head.x + 20, head.y + 20);
-                if (probe) {
-                    filteredPoints = filteredPoints.filter(() => Math.random() < ecoModifiers.boundarySlowdown);
+                // 贴边时在高动荡下加速消散
+                if (window.isPositionWalkable && ecoModifiers.boundarySlowdown < 1) {
+                    const head = fish.spine.joints[0];
+                    const probe = window.isPositionWalkable(head.x, head.y) && !window.isPositionWalkable(head.x + 20, head.y + 20);
+                    if (probe) {
+                        currentPoints = currentPoints.filter(() => Math.random() < ecoModifiers.boundarySlowdown);
+                    }
                 }
             }
 
-            if (filteredPoints.length === 0) {
+            // 更新上一帧完整度
+            fish.lastIntegrity = integrity;
+
+            if (currentPoints.length === 0) {
                 continue;
             }
             
-            // 转换到屏幕坐标
-            const screenPoints = filteredPoints.map(p => {
+            // 转换到屏幕坐标并应用效果
+            const screenPoints = currentPoints.map(p => {
                 const screenPos = camera.worldToScreen(p.x, p.y);
                 let boostedColor = p.color;
-                if (vividBoost !== 1 && p.color) {
+                
+                if (isWhaleFall) {
+                    // 鲸落效果：去色，降低透明度，略微偏蓝灰
+                    if (p.color) {
+                        const gray = (p.color[0] * 0.3 + p.color[1] * 0.59 + p.color[2] * 0.11);
+                        boostedColor = [
+                            gray * 0.8 + 0.1, // r (微蓝)
+                            gray * 0.8 + 0.15, // g
+                            gray * 0.9 + 0.2, // b
+                            p.color[3] * 0.6  // alpha 降低
+                        ];
+                    }
+                } else if (vividBoost !== 1 && p.color) {
                     boostedColor = [
                         Math.min(1, p.color[0] * vividBoost),
                         Math.min(1, p.color[1] * vividBoost * 0.95),
@@ -1495,7 +1546,13 @@ function animate(currentTime) {
                         p.color[3]
                     ];
                 }
-                return { ...p, x: screenPos.x, y: screenPos.y, color: boostedColor };
+                return { 
+                    ...p, 
+                    x: screenPos.x, 
+                    y: screenPos.y, 
+                    color: boostedColor,
+                    isDead: isWhaleFall
+                };
             });
             
             // Debug 模式时进一步降低粒子生成率

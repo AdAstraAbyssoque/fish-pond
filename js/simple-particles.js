@@ -94,7 +94,7 @@ class SimpleReglParticles {
         console.log('渲染命令创建完成');
     }
     
-    spawnParticle(x, y, color = null, isTail = false, tailProgress = 0) {
+    spawnParticle(x, y, color = null, isTail = false, tailProgress = 0, isDead = false) {
         if (this.particles.length >= this.maxParticles) {
             this.particles.shift(); // 移除最老的粒子
         }
@@ -102,7 +102,12 @@ class SimpleReglParticles {
         // 根据是否是尾巴调整参数
         let speed, lifeMultiplier, sizeMultiplier;
         
-        if (isTail) {
+        if (isDead) {
+            // 鲸落尸体粒子：几乎不动，寿命适中
+            speed = 0.05 + Math.random() * 0.1; // 极低速度
+            lifeMultiplier = 0.8; 
+            sizeMultiplier = 1.0;
+        } else if (isTail) {
             // 尾巴粒子：更大速度，更长生命，更大尺寸
             speed = (1.0 + tailProgress * 3.0) + Math.random() * 2.0; // 尾尖速度更大
             lifeMultiplier = 1.5 + tailProgress * 1.5; // 尾巴生命更长
@@ -127,8 +132,14 @@ class SimpleReglParticles {
             initialLife: this.config.lifeSpan * lifeMultiplier,
             size: baseSize * sizeMultiplier,
             color: color || this.config.colorStart,
-            isTail: isTail
+            isTail: isTail,
+            isDead: isDead
         };
+        
+        if (isDead) {
+            // 尸体粒子缓慢下沉 (假设 y 是向下增加)
+            particle.vy += 0.2; 
+        }
         
         this.particles.push(particle);
     }
@@ -174,12 +185,19 @@ class SimpleReglParticles {
                 // 在所有骨骼点上生成粒子（带颜色和尾巴信息）
                 for (let i = 0; i < spawnCount; i++) {
                     const point = skeletonPoints[Math.floor(Math.random() * skeletonPoints.length)];
+                    
+                    // 如果是尸体粒子，大幅降低生成率(只保留5%)，防止静态堆积过亮
+                    if (point.isDead && Math.random() > 0.05) {
+                        continue;
+                    }
+                    
                     this.spawnParticle(
                         point.x, 
                         point.y, 
                         point.color, 
                         point.isTail || false, 
-                        point.tailProgress || 0
+                        point.tailProgress || 0,
+                        point.isDead || false
                     );
                 }
             }
