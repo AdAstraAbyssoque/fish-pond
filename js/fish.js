@@ -71,8 +71,8 @@ class Fish {
         this.schoolingCooldown = 0;    // 结群冷却时间
         this.isSchooling = false;
         
-        // 死亡快照（鲸落）
-        this.deadSnapshot = null;
+        // 是否已经永久死亡（用于控制玩家鱼消失动画）
+        this.isPermanentlyDead = false;
     }
 
     resolve(otherFish, deltaTime, canvasWidth, canvasHeight, playerControl = null, playerFish = null, ecoModifiers = null) {
@@ -262,8 +262,16 @@ class Fish {
         }
 
         // 最小速度
-        if (this.velocity.mag() < 0.2 * SPEED_SCALE) {
-            this.velocity = this.velocity.setMag(0.2 * SPEED_SCALE);
+        // 让最小速度也受生态倍率影响，这样濒死时可以停下来
+        // eco.speedMultiplier 在惊扰时可能>1，取 min(1, val) 确保最小速度只会降低不会升高
+        const baseMinSpeed = 0.2 * SPEED_SCALE;
+        let effectiveMinSpeed = baseMinSpeed;
+        if (eco.speedMultiplier !== undefined && eco.speedMultiplier < 1) {
+            effectiveMinSpeed = baseMinSpeed * eco.speedMultiplier;
+        }
+
+        if (this.velocity.mag() < effectiveMinSpeed) {
+            this.velocity = this.velocity.setMag(effectiveMinSpeed);
         }
 
         // 使用合理的速度倍数（而不是固定的12）

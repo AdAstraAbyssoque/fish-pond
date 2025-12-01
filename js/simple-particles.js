@@ -103,10 +103,10 @@ class SimpleReglParticles {
         let speed, lifeMultiplier, sizeMultiplier;
         
         if (isDead) {
-            // 鲸落尸体粒子：几乎不动，寿命适中
-            speed = 0.05 + Math.random() * 0.1; // 极低速度
-            lifeMultiplier = 0.8; 
-            sizeMultiplier = 1.0;
+            // 鲸落/散开粒子：爆发速度，迅速减速
+            speed = 15.0 + Math.random() * 20.0; 
+            lifeMultiplier = 2.5; // 存在时间较长
+            sizeMultiplier = 0.8;
         } else if (isTail) {
             // 尾巴粒子：更大速度，更长生命，更大尺寸
             speed = (1.0 + tailProgress * 3.0) + Math.random() * 2.0; // 尾尖速度更大
@@ -136,12 +136,34 @@ class SimpleReglParticles {
             isDead: isDead
         };
         
-        if (isDead) {
-            // 尸体粒子缓慢下沉 (假设 y 是向下增加)
-            particle.vy += 0.2; 
-        }
+        // 散开粒子不需要额外的重力下沉，让它们自然散开
         
         this.particles.push(particle);
+    }
+    
+    // 新增：粒子爆发（用于鲸落散开）
+    explode(points) {
+        if (!points || points.length === 0) return;
+        
+        // 对每个采样点生成 1-2 个粒子
+        for (const point of points) {
+            // 随机生成 1 或 2 个粒子
+            const count = Math.random() < 0.5 ? 1 : 2;
+            for (let i = 0; i < count; i++) {
+                // 添加一点位置抖动
+                const jitterX = (Math.random() - 0.5) * 4;
+                const jitterY = (Math.random() - 0.5) * 4;
+                
+                this.spawnParticle(
+                    point.x + jitterX, 
+                    point.y + jitterY, 
+                    point.color, 
+                    false, 
+                    0, 
+                    true // isDead = true，触发散开物理参数
+                );
+            }
+        }
     }
     
     update(deltaTime, skeletonPoints) {
@@ -162,7 +184,11 @@ class SimpleReglParticles {
             p.y += p.vy * deltaTime;
             
             // 根据是否是尾巴粒子调整阻尼
-            if (p.isTail) {
+            if (p.isDead) {
+                // 散开粒子：中等阻尼，让其滑行一段距离
+                p.vx *= 0.92;
+                p.vy *= 0.92;
+            } else if (p.isTail) {
                 // 尾巴粒子：更小阻尼，保持飘逸感
                 p.vx *= 0.96;
                 p.vy *= 0.96;
@@ -186,8 +212,8 @@ class SimpleReglParticles {
                 for (let i = 0; i < spawnCount; i++) {
                     const point = skeletonPoints[Math.floor(Math.random() * skeletonPoints.length)];
                     
-                    // 如果是尸体粒子，大幅降低生成率(只保留5%)，防止静态堆积过亮
-                    if (point.isDead && Math.random() > 0.05) {
+                    // 如果是尸体粒子，保留更多粒子(30%)，但单个粒子更透明，形成厚重感
+                    if (point.isDead && Math.random() > 0.3) {
                         continue;
                     }
                     

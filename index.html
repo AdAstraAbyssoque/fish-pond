@@ -41,7 +41,7 @@
         </div>
         <button id="resetScale" type="button">重置默认尺寸</button>
     </div>
-    <div id="eco-panel" aria-live="polite">
+    <div id="eco-panel" aria-live="polite" style="display: none;">
         <div class="eco-head">
             <div>
                 <p class="eco-label">池塘稳态</p>
@@ -84,6 +84,10 @@
             <span id="healthValue" class="eco-bar-value">100%</span>
         </div>
         <p id="ecoNote" class="eco-note">💡 摇晃传感器改变水体状态，静置后自动恢复平衡。</p>
+    </div>
+
+    <div id="status-bar" style="position: fixed; bottom: 10px; left: 10px; color: rgba(255, 255, 255, 0.7); font-family: monospace; font-size: 14px; pointer-events: none; text-shadow: 1px 1px 2px rgba(0,0,0,0.8); z-index: 100;">
+        <span id="mini-status">准备就绪 | 🐟</span>
     </div>
 
     <script src="node_modules/regl/dist/regl.min.js"></script>

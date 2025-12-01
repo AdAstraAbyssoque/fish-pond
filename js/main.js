@@ -263,8 +263,8 @@ class PondHomeostasis {
         if (isInPanic) {
             this.panicTime += deltaTime;
             
-            // 惊扰超过8秒 → 永久死亡
-            if (this.panicTime >= 8) {
+            // 惊扰超过15秒 → 永久死亡
+            if (this.panicTime >= 15) {
                 this.isPermanentlyDead = true;
                 this.health = 0;
                 this.capacity = 0;
@@ -346,8 +346,8 @@ class PondHomeostasis {
         // 即使完全消失，也保留极少量的影子(0.05)，除非 panicTime 极大
         let visibility = 1.0 - progress;
         
-        // 如果 panicTime 极大（超过10秒），彻底消失
-        if (this.panicTime > 10) visibility = 0;
+        // 如果 panicTime 极大（超过17秒），彻底消失
+        if (this.panicTime > 17) visibility = 0;
         
         return Math.max(0, visibility * baseHealth);
     }
@@ -373,29 +373,21 @@ const USE_REAL_SENSOR = false;  // true=真实传感器后端, false=模拟数�
 const WEBSOCKET_URL = 'ws://localhost:8765';  // Python WebSocket 服务器地址
 
 // 模拟一个"Python 后端"源源推送四维加速度（x, y, z, a）
+let mockPhaseIndex = 0; // 当前mock状态索引
+const mockPhases = [
+    { name: '静水', base: 0.6, spread: 0.8, jerk: [0.03, 0.18], duration: [5, 9] },
+    { name: '微扰', base: 2.4, spread: 1.6, jerk: [0.25, 0.8], duration: [6, 10] },
+    { name: '惊扰', base: 6.5, spread: 3.2, jerk: [0.7, 2.1], duration: [3, 5.5] }
+];
+
 function createMockAccelerometerStream() {
     const listeners = [];
-    const phases = [
-        { name: '静水', base: 0.6, spread: 0.8, jerk: [0.03, 0.18], duration: [5, 9] },
-        { name: '微扰', base: 2.4, spread: 1.6, jerk: [0.25, 0.8], duration: [6, 10] },
-        { name: '惊扰', base: 6.5, spread: 3.2, jerk: [0.7, 2.1], duration: [3, 5.5] }
-    ];
-    let currentPhase = { ...phases[0], remaining: randomRange(phases[0].duration[0], phases[0].duration[1]) };
+    let currentPhase = { ...mockPhases[mockPhaseIndex], remaining: Infinity }; // 手动控制时不自动切换
     let lastVector = { x: 0, y: 0, z: 0, a: 0, magnitude: 0, phase: currentPhase.name };
     const intervalMs = 320;
 
-    const pickPhase = (lastName) => {
-        const candidates = phases.filter(p => p.name !== lastName || Math.random() < 0.35);
-        const next = candidates[Math.floor(Math.random() * candidates.length)];
-        return { ...next, remaining: randomRange(next.duration[0], next.duration[1]) };
-    };
-
     const tick = () => {
-        currentPhase.remaining -= intervalMs / 1000;
-        if (currentPhase.remaining <= 0) {
-            currentPhase = pickPhase(currentPhase.name);
-        }
-
+        // 手动控制模式下不自动切换phase
         const dir = randomUnitVector3();
         const magnitude = Math.max(0, currentPhase.base + (Math.random() - 0.5) * currentPhase.spread * 2);
         const jerk = randomRange(currentPhase.jerk[0], currentPhase.jerk[1]) * (Math.random() < 0.18 ? 2.4 : 1);
@@ -420,6 +412,18 @@ function createMockAccelerometerStream() {
         },
         getLatest() {
             return lastVector;
+        },
+        setPhase(index) {
+            if (index >= 0 && index < mockPhases.length) {
+                mockPhaseIndex = index;
+                currentPhase = { ...mockPhases[mockPhaseIndex], remaining: Infinity };
+                lastVector.phase = currentPhase.name;
+                // 立即通知一次
+                listeners.forEach(cb => cb(lastVector));
+            }
+        },
+        getCurrentPhase() {
+            return mockPhaseIndex;
         },
         stop() {
             clearInterval(timer);
@@ -456,8 +460,13 @@ function createRealAccelerometerStream() {
                 // 显示连接状态
                 const statusDiv = document.getElementById('sensor-status');
                 if (statusDiv) {
-                    statusDiv.textContent = '🟢 传感器已连接';
-                    statusDiv.style.color = '#00ff00';
+                    // 只在真实连接下显示
+                    if (USE_REAL_SENSOR) {
+                        statusDiv.textContent = '🟢 传感器已连接';
+                        statusDiv.style.color = '#00ff00';
+                    } else {
+                        statusDiv.style.display = 'none';
+                    }
                 }
             };
             
@@ -889,7 +898,7 @@ function updateEcosystemPanelUI(snapshot) {
             ecosystemUI.note.style.color = '#ff0000';
             ecosystemUI.note.style.fontWeight = 'bold';
         } else if (sensor.phase === '惊扰' && panicTime >= 2) {
-            const remaining = (10 - panicTime).toFixed(0);
+            const remaining = (17 - panicTime).toFixed(0);
             ecosystemUI.note.textContent = `⚠️ 鱼群正在消失！再持续 ${remaining} 秒将永久死亡！停止摇晃！`;
             ecosystemUI.note.style.color = '#ff3300';
             ecosystemUI.note.style.fontWeight = 'bold';
@@ -1199,6 +1208,20 @@ function setupDebugControls() {
                 console.log('正常模式：显示1/4池塘，zoom:', normalZoom.toFixed(3));
             }
         }
+        
+        // Mock模式下，数字键切换状态：1=静水, 2=微扰, 3=惊扰
+        if (!USE_REAL_SENSOR && sensorStream && sensorStream.setPhase) {
+            if (e.key === '1') {
+                sensorStream.setPhase(0);
+                console.log('🌊 切换到：静水');
+            } else if (e.key === '2') {
+                sensorStream.setPhase(1);
+                console.log('🌊 切换到：微扰');
+            } else if (e.key === '3') {
+                sensorStream.setPhase(2);
+                console.log('🌊 切换到：惊扰');
+            }
+        }
     });
     
     // 鼠标滚轮缩放（仅 debug 模式）
@@ -1324,19 +1347,74 @@ function animate(currentTime) {
     
     // ===== 2. 更新所有鱼 =====
     for (let fish of fishes) {
-        // 只有橙色鱼（玩家鱼）受传感器角度控制
-        // 其他白色鱼只受环境动荡影响（速度/消失），方向完全自由/随机
-        const modifiersForThisFish = fish.isPlayer 
-            ? ecoModifiers 
-            : { ...ecoModifiers, sensorAngle: null }; // 移除白色鱼的传感器角度控制
+        // 计算个体的完整度来影响速度（濒死乏力）
+        const integrity = homeostasis ? homeostasis.getFishIntegrity(fish.ecoSensitivity) : 1;
+        
+        // Mock模式下，玩家鱼由键盘控制
+        let modifiersForThisFish;
+        if (fish.isPlayer && !USE_REAL_SENSOR) {
+            // 键盘控制：WASD控制方向
+            const moveVec = keyboard.getMovementVector();
+            if (moveVec.x !== 0 || moveVec.y !== 0) {
+                // 计算目标角度
+                const targetAngle = Math.atan2(moveVec.y, moveVec.x);
+                // 转换为角度（度）
+                let angleDeg = (targetAngle * 180 / Math.PI);
+                // 归一化到-180到180
+                if (angleDeg > 180) angleDeg -= 360;
+                if (angleDeg < -180) angleDeg += 360;
+                
+                modifiersForThisFish = {
+                    ...ecoModifiers,
+                    sensorAngle: angleDeg // 使用键盘方向作为传感器角度
+                };
+            } else {
+                // 没有键盘输入时，保持当前方向
+                modifiersForThisFish = {
+                    ...ecoModifiers,
+                    sensorAngle: null // 不改变方向
+                };
+            }
+        } else if (fish.isPlayer) {
+            // 真实传感器模式：正常使用传感器角度
+            modifiersForThisFish = ecoModifiers;
+        } else {
+            // 白色鱼：不受传感器角度控制
+            modifiersForThisFish = { ...ecoModifiers, sensorAngle: null };
+        }
+            
+        // 如果完整度低，强制减速（模拟濒死游不动）
+        if (integrity < 0.6) {
+            // 线性衰减：0.6 -> 1.0x, 0.0 -> 0.0x
+            // 对于橙色鱼，当它快消失时，也应该动不了了
+            const fatigue = Math.max(0, integrity / 0.6);
+            modifiersForThisFish = {
+                ...modifiersForThisFish,
+                speedMultiplier: (modifiersForThisFish.speedMultiplier || 1) * fatigue
+            };
+        }
             
         fish.resolve(fishes, deltaTime, WORLD_WIDTH, WORLD_HEIGHT, null, null, modifiersForThisFish);
     }
     
     // ===== 3. 摄像机跟随玩家鱼 =====
     if (playerFish) {
+        if (lastEcosystemSnapshot && lastEcosystemSnapshot.isPermanentlyDead) {
+            // 永久死亡：拉大视野到全景（类似 V 键 Debug 模式）
+            // 计算能看到整个池塘的缩放
+            const fitZoom = Math.min(canvas.width / WORLD_WIDTH, canvas.height / WORLD_HEIGHT) * 0.95;
+            
+            // 平滑过渡到全景缩放
+            camera.targetZoom = fitZoom;
+            
+            // 摄像机移动到池塘中心
+            camera.targetX = WORLD_WIDTH / 2;
+            camera.targetY = WORLD_HEIGHT / 2;
+        } else {
+            // 正常状态：跟随玩家鱼
         // 使用更高的平滑度，让摄像机更快地跟随到中心
         camera.follow(playerFish.spine.joints[0], 0.15);
+        }
     }
     camera.update();
     
@@ -1404,10 +1482,17 @@ function animate(currentTime) {
     //     landmarks.render(ctx, camera, currentTime);
     // }
     
-    // （可选）渲染鱼的实体
-    // for (let fish of visibleFishes) {
-    //     fish.display(ctx);
-    // }
+    // 静水状态下渲染鱼的实体（不使用粒子）
+    const isCalmWater = homeostasis && homeostasis.sensor && homeostasis.sensor.phase === '静水';
+    if (isCalmWater) {
+        for (let fish of visibleFishes) {
+            const integrity = homeostasis ? homeostasis.getFishIntegrity(fish.ecoSensitivity) : 1;
+            // 只有完整度足够高时才显示实体
+            if (integrity > 0.1) {
+                fish.display(ctx);
+            }
+        }
+    }
     
     // Debug: 绘制世界边界
     if (debugMode) {
@@ -1435,8 +1520,8 @@ function animate(currentTime) {
     
     camera.restoreTransform(ctx);
     
-    // ===== 7. 粒子系统（只处理可见的鱼） =====
-    if (particleSystem && visibleFishes.length > 0) {
+    // ===== 7. 粒子系统（只处理可见的鱼，静水状态下不显示粒子） =====
+    if (particleSystem && visibleFishes.length > 0 && !isCalmWater) {
         const ecoSpawnMultiplier = homeostasis ? homeostasis.getParticleMultiplier() : 1;
         const debugSpawnScale = debugMode ? debugParticleReduction : 1;
         particleSystem.spawnRate = BASE_PARTICLE_SPAWN_RATE * ecoSpawnMultiplier * debugSpawnScale;
@@ -1461,26 +1546,63 @@ function animate(currentTime) {
             // 惊扰状态下鱼会根据时间逐渐消失
             const ecoModifiers = getEcoModifiers(lastEcosystemSnapshot);
             const vividBoost = ecoModifiers.vividBoost || 1;
-
+            
             // 处理鲸落逻辑
             if (integrity <= 0) {
-                // 如果是刚死且没有快照，生成快照
-                if (!fish.deadSnapshot) {
-                    // 强制采样一次作为尸体（鲸落）
-                    // 使用较高的密度(2)，保持形态清晰
-                    const points = fish.sampleBodyPointsFromImage(offscreenCtx, 2);
-                    fish.deadSnapshot = points.map(p => ({
-                        ...p,
-                        isDead: true
-                    }));
+                // 如果是刚死（上一帧还活着），生成死亡快照用于持续渲染残留
+                if (fish.lastIntegrity > 0 && !fish.deadSnapshot) {
+                    // 玩家鱼（橙色鱼）不生成鲸落散开，直接消失
+                    // 普通鱼触发散开并保留快照
+                    if (!fish.isPlayer) {
+                        // 强制采样一次作为散开源和残留快照
+                        // 使用较高的密度(2)
+                        const points = fish.sampleBodyPointsFromImage(offscreenCtx, 2);
+                        
+                        // 触发一次性粒子爆发
+                        particleSystem.explode(points);
+                        
+                        // 保存快照用于持续渲染残留（逐渐淡出）
+                        fish.deadSnapshot = points.map(p => ({
+                            ...p,
+                            isDead: true,
+                            fadeTime: 0 // 淡出计时器
+                        }));
+                        
+                        // 触发涟漪
+                        const head = fish.spine.joints[0];
+                        createRipple(head.x, head.y);
+                    }
                 }
                 
-                // 使用尸体快照
+                // 如果有死亡快照，持续渲染残留（逐渐淡出）
                 if (fish.deadSnapshot) {
-                    currentPoints = fish.deadSnapshot;
-                    isWhaleFall = true;
+                    // 更新淡出计时器
+                    fish.deadSnapshot.forEach(p => {
+                        p.fadeTime = (p.fadeTime || 0) + deltaTime;
+                    });
+                    
+                    // 过滤掉完全淡出的点（超过3秒）
+                    fish.deadSnapshot = fish.deadSnapshot.filter(p => p.fadeTime < 3.0);
+                    
+                    if (fish.deadSnapshot.length > 0) {
+                        currentPoints = fish.deadSnapshot;
+                        isWhaleFall = true;
+                    } else {
+                        // 完全淡出后清除快照
+                        fish.deadSnapshot = null;
+                    }
                 }
-                // 如果采样失败(空数组)，则 currentPoints 为空，后面会自动处理
+                
+                // 玩家鱼特殊处理：如果是最后永久死亡（系统崩溃），则标记为死亡并允许消失
+                if (fish.isPlayer && homeostasis.isPermanentlyDead) {
+                    fish.isPermanentlyDead = true;
+                }
+                
+                // 如果没有残留快照，跳过渲染
+                if (!fish.deadSnapshot || fish.deadSnapshot.length === 0) {
+                    fish.lastIntegrity = integrity;
+                    continue;
+                }
             } else {
                 // 复活/正常状态：如果有快照，清除它
                 if (fish.deadSnapshot) {
@@ -1489,27 +1611,27 @@ function animate(currentTime) {
                 
                 const effectiveIntegrity = fish.isPlayer ? Math.max(integrity, 0.3) : integrity;
 
-                // 优化采样密度逻辑：
-                const baseDensity = debugMode ? 3 : 1;
-                let variableDensity = baseDensity;
-                
-                if (effectiveIntegrity < 0.5) {
-                    variableDensity = Math.max(baseDensity, Math.round(baseDensity + (0.5 - effectiveIntegrity) * 10));
-                }
-                
+            // 优化采样密度逻辑：
+            const baseDensity = debugMode ? 3 : 1;
+            let variableDensity = baseDensity;
+            
+            if (effectiveIntegrity < 0.5) {
+                variableDensity = Math.max(baseDensity, Math.round(baseDensity + (0.5 - effectiveIntegrity) * 10));
+            }
+            
                 currentPoints = fish.sampleBodyPointsFromImage(offscreenCtx, variableDensity);
-                
+
                 // 完整度低时随机丢弃点
-                if (effectiveIntegrity < 0.9) {
-                    const keepChance = effectiveIntegrity;
+            if (effectiveIntegrity < 0.9) {
+                const keepChance = effectiveIntegrity;
                     currentPoints = currentPoints.filter(() => Math.random() < keepChance);
-                }
+            }
 
                 // 贴边时在高动荡下加速消散
-                if (window.isPositionWalkable && ecoModifiers.boundarySlowdown < 1) {
-                    const head = fish.spine.joints[0];
-                    const probe = window.isPositionWalkable(head.x, head.y) && !window.isPositionWalkable(head.x + 20, head.y + 20);
-                    if (probe) {
+            if (window.isPositionWalkable && ecoModifiers.boundarySlowdown < 1) {
+                const head = fish.spine.joints[0];
+                const probe = window.isPositionWalkable(head.x, head.y) && !window.isPositionWalkable(head.x + 20, head.y + 20);
+                if (probe) {
                         currentPoints = currentPoints.filter(() => Math.random() < ecoModifiers.boundarySlowdown);
                     }
                 }
@@ -1528,14 +1650,18 @@ function animate(currentTime) {
                 let boostedColor = p.color;
                 
                 if (isWhaleFall) {
-                    // 鲸落效果：去色，降低透明度，略微偏蓝灰
+                    // 鲸落效果：幽灵般的青灰色/苍白金色，随时间淡出
                     if (p.color) {
                         const gray = (p.color[0] * 0.3 + p.color[1] * 0.59 + p.color[2] * 0.11);
+                        // 根据淡出时间计算透明度（0-3秒，从0.4到0）
+                        const fadeProgress = p.fadeTime ? Math.min(1, p.fadeTime / 3.0) : 0;
+                        const alpha = 0.4 * (1 - fadeProgress);
+                        
                         boostedColor = [
-                            gray * 0.8 + 0.1, // r (微蓝)
-                            gray * 0.8 + 0.15, // g
-                            gray * 0.9 + 0.2, // b
-                            p.color[3] * 0.6  // alpha 降低
+                            gray * 0.5 + 0.2, // R
+                            gray * 0.6 + 0.3, // G (偏青)
+                            gray * 0.7 + 0.4, // B (偏蓝)
+                            alpha              // Alpha 随时间淡出
                         ];
                     }
                 } else if (vividBoost !== 1 && p.color) {
@@ -1599,6 +1725,22 @@ function animate(currentTime) {
     if (lotusImage && lotusImage.complete) {
         overlayCtx.save();
         
+        // 应用惊扰滤镜：荷叶也变黑白
+        if (homeostasis) {
+            const panic = homeostasis.panic; // 0-1
+            // 只有当惊扰程度明显时才应用，节省性能
+            if (panic > 0.05) {
+                // 灰度增加 (0 -> 100%)
+                const grayscale = Math.min(100, panic * 120); 
+                // 亮度降低 (100% -> 60%)
+                const brightness = Math.max(60, 100 - panic * 40);
+                // 对比度略微降低 (100% -> 90%)
+                const contrast = Math.max(90, 100 - panic * 10);
+                
+                overlayCtx.filter = `grayscale(${grayscale}%) brightness(${brightness}%) contrast(${contrast}%)`;
+            }
+        }
+        
         // 荷叶固定在世界坐标 (0, 0) 到 (WORLD_WIDTH, WORLD_HEIGHT)
         // 使用 worldToScreen 转换，和背景图片一样的行为
         const topLeftScreen = camera.worldToScreen(0, 0);
@@ -1616,12 +1758,14 @@ function animate(currentTime) {
     }
     
     // ===== 8. 屏幕空间 UI =====
+    if (USE_REAL_SENSOR) {
     ctx.save();
     ctx.fillStyle = 'rgba(100, 200, 255, 0.6)';
     ctx.font = '14px monospace';
     const infoText = `玩家: (${Math.floor(playerFish?.spine.joints[0].x || 0)}, ${Math.floor(playerFish?.spine.joints[0].y || 0)}) | 视野: ${visibleFishes.length}/${fishes.length} 鱼 | Zoom: ${camera.zoom.toFixed(2)}x`;
     ctx.fillText(infoText, 10, canvas.height - 20);
     ctx.restore();
+    }
 
     requestAnimationFrame(animate);
 }
