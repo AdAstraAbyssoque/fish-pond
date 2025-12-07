@@ -7,6 +7,53 @@
     <link rel="stylesheet" href="css/style.css" />
   </head>
   <body>
+    <!-- 新增：开始界面 -->
+    <div id="start-screen">
+      <div class="story-content">
+        <h1>灵 韵 池</h1>
+        <h2 class="subtitle">The Pond of Resonance</h2>
+
+        <div class="narrative">
+          <p>传说这方池水映照人心。</p>
+          <p>锦鲤非鱼，乃自然之息，随灵律而动。</p>
+          <p class="en">Legend says this pond mirrors the soul.</p>
+          <p class="en">
+            The Koi are not just fish; they are the breath of nature.
+          </p>
+
+          <div class="spacer"></div>
+
+          <p>你手握共鸣之器。</p>
+          <p>轻抚可引之，强求则乱，乱则万物凋零。</p>
+          <p class="en">You hold the artifact of resonance.</p>
+          <p class="en">
+            Guide them gently. Force leads to chaos, and chaos leads to silence.
+          </p>
+        </div>
+
+        <button id="start-btn">入 梦 / Enter</button>
+      </div>
+    </div>
+
+    <!-- 新增：结局界面 -->
+    <div id="ending-screen" style="display: none; opacity: 0">
+      <div class="story-content">
+        <h1>万 籁 俱 寂</h1>
+        <h2 class="subtitle">The Silence</h2>
+
+        <div class="narrative">
+          <p>灵韵已断，止水无澜。</p>
+          <p>执念过深，终成虚妄。</p>
+          <p class="en">The flow is broken. The water falls silent.</p>
+          <p class="en">In trying to control everything, we lost it all.</p>
+        </div>
+
+        <button id="restart-btn" onclick="location.reload()">
+          重 塑 / Rebirth
+        </button>
+      </div>
+    </div>
+
     <div id="canvas-wrapper">
       <canvas id="canvas"></canvas>
       <canvas id="particle-canvas"></canvas>

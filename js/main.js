@@ -133,6 +133,9 @@ let calmState = true;
 const CALM_ENTER_PANIC = 0.08; // 低于该值逐步进入静水渲染
 const CALM_EXIT_PANIC = 0.14;  // 高于该值逐步退出静水渲染
 
+// 游戏状态管理
+let gameState = 'WAITING'; // WAITING, PLAYING, ENDING, ENDED
+
 function clampScale(value) {
     return Math.min(SCALE_RANGE.max, Math.max(SCALE_RANGE.min, value));
 }
@@ -1225,6 +1228,7 @@ function bootstrap() {
     setupScaleControls();
     setupDebugControls();
     setupEcosystemPanel();
+    setupGameFlow(); // 新增：设置游戏流程
     
     if (!sensorStream) {
         sensorStream = createAccelerometerStream();  // 使用工厂函数，根据配置选择真实/模拟数据
@@ -1358,6 +1362,65 @@ function setupDebugControls() {
     });
 }
 
+// 新增：游戏流程控制
+function setupGameFlow() {
+    const startBtn = document.getElementById('start-btn');
+    const startScreen = document.getElementById('start-screen');
+    const endingScreen = document.getElementById('ending-screen');
+    
+    // 点击开始
+    startBtn.addEventListener('click', () => {
+        gameState = 'PLAYING';
+        document.body.classList.add('game-active');
+        
+        // 淡出开始界面
+        startScreen.style.opacity = '0';
+        setTimeout(() => {
+            startScreen.style.display = 'none';
+        }, 2000);
+        
+        console.log('🌊 进入灵韵池...');
+    });
+    
+    // 监听 O 键作为后门 (Over)
+    window.addEventListener('keydown', (e) => {
+        if (e.key.toLowerCase() === 'o' && gameState === 'PLAYING') {
+            console.log('💀 后门触发：强制结局');
+            triggerEnding();
+        }
+    });
+}
+
+// 新增：触发结局
+function triggerEnding() {
+    if (gameState === 'ENDING' || gameState === 'ENDED') return;
+    gameState = 'ENDING';
+    
+    console.log('💀 生态崩溃，进入结局流程...');
+    
+    // 1. 强制设置稳态模型为永久死亡
+    if (homeostasis) {
+        homeostasis.isPermanentlyDead = true;
+        homeostasis.health = 0;
+        homeostasis.capacity = 0;
+    }
+    
+    // 2. 视觉效果：全屏逐渐变灰/黑
+    const canvas = document.getElementById('canvas');
+    canvas.style.transition = 'filter 5s ease';
+    canvas.style.filter = 'grayscale(100%) brightness(30%)';
+    
+    // 3. 显示结局文字
+    setTimeout(() => {
+        const endingScreen = document.getElementById('ending-screen');
+        endingScreen.style.display = 'flex';
+        // 强制重绘以触发 transition
+        endingScreen.offsetHeight; 
+        endingScreen.style.opacity = '1';
+        gameState = 'ENDED';
+    }, 4000); // 4秒后显示结局文字，留给玩家看鱼消失的时间
+}
+
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', bootstrap, { once: true });
 } else {
@@ -1455,6 +1518,29 @@ function drawPondBorders(ctx) {
 let lastTime = 0;
 
 function animate(currentTime) {
+    // 如果还没开始，只渲染背景，不更新逻辑
+    if (gameState === 'WAITING') {
+        // 渲染背景图片
+        if (backgroundImage && backgroundImage.complete) {
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // 简单的背景渲染，不应用摄像机变换
+            const zoom = Math.max(canvas.width / backgroundImage.width, canvas.height / backgroundImage.height);
+            const w = backgroundImage.width * zoom;
+            const h = backgroundImage.height * zoom;
+            const x = (canvas.width - w) / 2;
+            const y = (canvas.height - h) / 2;
+            ctx.drawImage(backgroundImage, x, y, w, h);
+            
+            // 加一层暗色滤镜让文字更清晰
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+        requestAnimationFrame(animate);
+        return; 
+    }
+
     // 计算deltaTime（秒）
     const deltaTime = lastTime === 0 ? 0 : (currentTime - lastTime) / 1000;
     lastTime = currentTime;
@@ -1462,6 +1548,11 @@ function animate(currentTime) {
     if (homeostasis) {
         lastEcosystemSnapshot = homeostasis.step(deltaTime || 0.016);
         updateEcosystemPanelUI(lastEcosystemSnapshot);
+    }
+
+    // 检查是否自然死亡
+    if (gameState === 'PLAYING' && homeostasis && homeostasis.isPermanentlyDead) {
+        triggerEnding();
     }
     const panicLevel = lastEcosystemSnapshot?.panic ?? 0;
     const isPhaseCalm = lastEcosystemSnapshot?.sensor?.phase === '静水';

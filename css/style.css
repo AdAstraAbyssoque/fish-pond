@@ -281,6 +281,127 @@ canvas {
   }
 }
 
+/* Story Screens */
+#start-screen,
+#ending-screen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(10px);
+  z-index: 1000;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  color: #fff;
+  text-align: center;
+  transition: opacity 2s ease;
+}
+
+.story-content {
+  max-width: 600px;
+  padding: 40px;
+  opacity: 0;
+  animation: fadeIn 2s ease forwards 0.5s;
+}
+
+.story-content h1 {
+  font-family: "PingFang SC", "Microsoft YaHei", serif;
+  font-size: 48px;
+  font-weight: 300;
+  letter-spacing: 12px;
+  margin-bottom: 10px;
+  text-shadow: 0 0 20px rgba(124, 214, 255, 0.5);
+  color: #e0f7ff;
+}
+
+.story-content .subtitle {
+  font-size: 14px;
+  font-weight: 300;
+  letter-spacing: 4px;
+  color: #7cd6ff;
+  margin-bottom: 60px;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+.story-content .narrative {
+  font-size: 16px;
+  line-height: 2;
+  color: rgba(255, 255, 255, 0.85);
+  margin-bottom: 60px;
+}
+
+.story-content .narrative p {
+  margin: 8px 0;
+}
+
+.story-content .narrative .en {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.4);
+  font-style: italic;
+  margin-top: -4px;
+  margin-bottom: 16px;
+  font-family: "Times New Roman", serif;
+}
+
+.story-content .spacer {
+  height: 30px;
+}
+
+#start-btn,
+#restart-btn {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: #fff;
+  padding: 12px 40px;
+  font-size: 14px;
+  letter-spacing: 4px;
+  border-radius: 50px;
+  cursor: pointer;
+  transition: all 0.5s ease;
+}
+
+#start-btn:hover,
+#restart-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: #7cd6ff;
+  box-shadow: 0 0 20px rgba(124, 214, 255, 0.3);
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 游戏状态类 */
+body.game-active #start-screen {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* 隐藏 UI 元素当游戏未开始时 */
+body:not(.game-active) #controls,
+body:not(.game-active) #zen-panel {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 1s ease;
+}
+
+body.game-active #controls,
+body.game-active #zen-panel {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 @media (max-width: 640px) {
   #controls {
     width: calc(100% - 40px);
