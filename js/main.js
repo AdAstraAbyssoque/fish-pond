@@ -106,6 +106,124 @@ function setWorldSize(width, height) {
     }
 }
 
+class AmbientController {
+    constructor(trackSources) {
+        this.tracks = {};
+        this.unlocked = false;
+        this.masterVolume = 1.0;
+        this.fadeDuration = 1.0;
+        this.baseRainVolume = 0.55; // 雨声更响一些
+        this.maxStormVolume = 0.85;
+        this.lastLevels = { rain: 1, storm: 0 };
+        this.loadTracks(trackSources);
+        this.attachUnlockHandlers();
+    }
+
+    loadTracks(trackSources) {
+        for (const [name, src] of Object.entries(trackSources || {})) {
+            const audio = new Audio(src);
+            audio.loop = true;
+            audio.preload = 'auto';
+            audio.volume = 0;
+            audio.addEventListener('error', () => console.warn(`环境音加载失败: ${src}`));
+            this.tracks[name] = audio;
+        }
+    }
+
+    attachUnlockHandlers() {
+        const unlock = () => {
+            this.unlocked = true;
+            this.sync();
+        };
+        const onceUnlock = () => {
+            unlock();
+            window.removeEventListener('pointerdown', onceUnlock);
+            window.removeEventListener('keydown', onceUnlock);
+        };
+        window.addEventListener('pointerdown', onceUnlock, { once: true });
+        window.addEventListener('keydown', onceUnlock, { once: true });
+    }
+
+    setMasterVolume(volume) {
+        this.masterVolume = clamp01(volume);
+        this.applyLevels();
+    }
+
+    sync() {
+        if (!this.unlocked) return;
+        ['rain', 'storm', 'thunder'].forEach(name => {
+            const track = this.tracks[name];
+            if (track && track.paused) {
+                track.play().catch(err => console.warn('环境音播放被阻止/失败:', err));
+            }
+        });
+    }
+
+    update({ rainLevel = 1, stormLevel = 0 } = {}) {
+        if (!this.unlocked) return;
+        this.lastLevels = {
+            rain: clamp01(rainLevel),
+            storm: clamp01(stormLevel)
+        };
+        this.applyLevels();
+    }
+
+    applyLevels() {
+        const rainTarget = this.baseRainVolume * this.lastLevels.rain * this.masterVolume;
+        const stormTarget = this.maxStormVolume * this.lastLevels.storm * this.masterVolume;
+        this.fadeTrack(this.tracks.rain, rainTarget, true);
+        ['storm', 'thunder'].forEach(name => {
+            if (this.tracks[name]) {
+                this.fadeTrack(this.tracks[name], stormTarget, true);
+            }
+        });
+    }
+
+    fadeOutAll(durationSec = 5) {
+        const prevFade = this.fadeDuration;
+        this.fadeDuration = durationSec;
+        this.update({ rainLevel: 0, stormLevel: 0 });
+        setTimeout(() => {
+            this.fadeDuration = prevFade;
+        }, durationSec * 1000 + 200);
+    }
+
+    fadeTrack(track, targetVolume, shouldPlay) {
+        if (!track) return;
+        if (track._fadeFrame) {
+            cancelAnimationFrame(track._fadeFrame);
+            track._fadeFrame = null;
+        }
+        const startVolume = track.volume;
+        const delta = targetVolume - startVolume;
+        const durationMs = this.fadeDuration * 1000;
+        const startTime = performance.now();
+
+        if (shouldPlay && track.paused) {
+            track.currentTime = 0;
+            track.play().catch(err => console.warn('环境音播放被阻止/失败:', err));
+        }
+
+        const step = (now) => {
+            const t = Math.min(1, (now - startTime) / durationMs);
+            const eased = t * t * (3 - 2 * t);
+            track.volume = startVolume + delta * eased;
+            if (t < 1) {
+                track._fadeFrame = requestAnimationFrame(step);
+            } else {
+                track.volume = targetVolume;
+                track._fadeFrame = null;
+                if (targetVolume === 0 && !shouldPlay) {
+                    track.pause();
+                    track.currentTime = 0;
+                }
+            }
+        };
+
+        track._fadeFrame = requestAnimationFrame(step);
+    }
+}
+
 // Debug 模式
 let debugMode = false;
 let debugParticleReduction = 1.0;  // 粒子数量倍率
@@ -116,10 +234,45 @@ const SCALE_RANGE = { min: 0.05, max: 1.2, default: 0.6 };  // 更大的鱼（60
 // 粒子与生态模型的基础参数
 const BASE_PARTICLE_SPAWN_RATE = 28000;
 
+// 音乐资源（放到 assets/audio 下）
+const MUSIC_TRACKS = {
+    calm: 'assets/audio/静水.mp3'
+};
+const AMBIENT_TRACKS = {
+    rain: 'assets/audio/rain.mp3',
+    storm: 'assets/audio/storm.mp3',
+    thunder: 'assets/audio/thunder.mp3' // 兼容命名
+};
+
 // 生态稳态/传感器状态
 let homeostasis = null;
 let sensorStream = null;
 let lastEcosystemSnapshot = null;
+let musicController = null;
+let ambientController = null;
+let ambientMasterVolume = 1;
+let deathAudioFaded = false;
+let deathAudioFading = false;
+
+function startDeathFade() {
+    if (deathAudioFaded) return;
+    deathAudioFading = true;
+    deathAudioFaded = true;
+    if (ambientController) {
+        const prevFade = ambientController.fadeDuration;
+        ambientController.fadeDuration = 5;
+        ambientController.update({ rainLevel: 0, stormLevel: 0 });
+        ambientController.setMasterVolume(0);
+        setTimeout(() => {
+            ambientController.fadeDuration = prevFade;
+        }, 5200);
+    }
+    if (musicController) {
+        musicController.fadeOut(5, () => {
+            deathAudioFading = false;
+        });
+    }
+}
 
 function clampScale(value) {
     return Math.min(SCALE_RANGE.max, Math.max(SCALE_RANGE.min, value));
@@ -155,6 +308,28 @@ function getEcoModifiers(snapshot) {
     return { speedMultiplier, noiseMultiplier, vividBoost, boundarySlowdown, sensorAngle };
 }
 
+function determineMusicState(snapshot) {
+    const soundState = determineSoundState(snapshot);
+    // 已停用音乐，只返回 calm，占位
+    return soundState === 'death' ? 'death' : 'calm';
+}
+
+function determineSoundState(snapshot) {
+    if (!snapshot) return 'calm';
+    if (snapshot.isPermanentlyDead) return 'death';
+    const phase = snapshot.sensor?.phase || '静水';
+    const panic = snapshot.panic || 0;
+
+    // 优先使用传感器阶段
+    if (phase === '惊扰') return 'disturbed';
+    if (phase === '微扰') return 'micro';
+
+    // 无阶段信息时用 panic 兜底
+    if (panic > 0.55) return 'disturbed';
+    if (panic > 0.2) return 'micro';
+    return 'calm';
+}
+
 function clamp01(value) {
     return Math.max(0, Math.min(1, value));
 }
@@ -177,6 +352,157 @@ function randomUnitVector3() {
         y: Math.sin(theta) * r,
         z
     };
+}
+
+class MusicController {
+    constructor(trackSources) {
+        this.tracks = {};
+        this.currentState = null;
+        this.pendingState = 'calm';
+        this.unlocked = false;
+        this.baseVolume = 0.45; // 静水音乐稍微调低
+        this.masterVolume = 1.0;
+        this.fadeDuration = 1.2; // seconds
+        this.loadTracks(trackSources);
+        this.attachUnlockHandlers();
+    }
+
+    loadTracks(trackSources) {
+        for (const [state, src] of Object.entries(trackSources || {})) {
+            const audio = new Audio(encodeURI(src));
+            audio.loop = true;
+            audio.preload = 'auto';
+            audio.volume = 0; // start muted; fade in on first play
+            audio.addEventListener('error', () => {
+                console.warn(`音乐加载失败: ${src}`);
+            });
+            this.tracks[state] = audio;
+        }
+    }
+
+    attachUnlockHandlers() {
+        const unlock = () => {
+            this.unlocked = true;
+            this.sync();
+        };
+        const onceUnlock = () => {
+            unlock();
+            window.removeEventListener('pointerdown', onceUnlock);
+            window.removeEventListener('keydown', onceUnlock);
+        };
+        window.addEventListener('pointerdown', onceUnlock, { once: true });
+        window.addEventListener('keydown', onceUnlock, { once: true });
+    }
+
+    setState(state) {
+        this.pendingState = state;
+        if (!this.unlocked) return;
+        if (state === this.currentState) return;
+        this.crossfadeTo(state);
+    }
+
+    sync() {
+        if (this.pendingState) {
+            this.setState(this.pendingState);
+        }
+    }
+
+    fadeOut(durationSec = 5, onDone = null) {
+        const durationMs = durationSec * 1000;
+        Object.values(this.tracks).forEach(track => {
+            if (!track) return;
+            if (track._fadeFrame) {
+                cancelAnimationFrame(track._fadeFrame);
+                track._fadeFrame = null;
+            }
+            const startVolume = track.volume;
+            const startTime = performance.now();
+            if (track.paused) {
+                track.play().catch(() => {});
+            }
+            const step = (now) => {
+                const t = Math.min(1, (now - startTime) / durationMs);
+                const eased = t * t * (3 - 2 * t);
+                track.volume = startVolume * (1 - eased);
+                if (t < 1) {
+                    track._fadeFrame = requestAnimationFrame(step);
+                } else {
+                    track.volume = 0;
+                    track.pause();
+                    track.currentTime = 0;
+                    track._fadeFrame = null;
+                    if (onDone) onDone();
+                }
+            };
+            track._fadeFrame = requestAnimationFrame(step);
+        });
+    }
+
+    crossfadeTo(state) {
+        const targetState = state;
+        Object.entries(this.tracks).forEach(([name, track]) => {
+            const targetVolume = name === targetState ? this.baseVolume * this.masterVolume : 0;
+            this.fadeTrack(track, targetVolume, name === targetState);
+        });
+        this.currentState = targetState;
+    }
+
+    fadeTrack(track, targetVolume, shouldPlay) {
+        if (!track) return;
+        // Cancel previous fade
+        if (track._fadeFrame) {
+            cancelAnimationFrame(track._fadeFrame);
+            track._fadeFrame = null;
+        }
+        const startVolume = track.volume;
+        const delta = targetVolume - startVolume;
+        const durationMs = this.fadeDuration * 1000;
+        const startTime = performance.now();
+
+        if (shouldPlay && track.paused) {
+            track.currentTime = 0;
+            track.play().catch(err => {
+                console.warn('音乐播放被阻止/失败:', err);
+            });
+        }
+
+        const step = (now) => {
+            const t = Math.min(1, (now - startTime) / durationMs);
+            const eased = t * t * (3 - 2 * t); // smoothstep easing
+            track.volume = startVolume + delta * eased;
+            if (t < 1) {
+                track._fadeFrame = requestAnimationFrame(step);
+            } else {
+                track.volume = targetVolume;
+                track._fadeFrame = null;
+                if (targetVolume === 0 && !shouldPlay) {
+                    track.pause();
+                    track.currentTime = 0;
+                }
+            }
+        };
+
+        track._fadeFrame = requestAnimationFrame(step);
+    }
+
+    setMasterVolume(volume) {
+        this.masterVolume = clamp01(volume);
+        // Re-apply current mix with new master
+        Object.entries(this.tracks).forEach(([name, track]) => {
+            const targetVolume = (name === this.currentState ? this.baseVolume : 0) * this.masterVolume;
+            // 如果目标音量为 0，直接停止并静音
+            if (targetVolume <= 0) {
+                track.pause();
+                track.currentTime = 0;
+                track.volume = 0;
+                track._fadeFrame && cancelAnimationFrame(track._fadeFrame);
+                track._fadeFrame = null;
+                return;
+            }
+            const shouldPlay = name === this.currentState;
+            this.fadeTrack(track, targetVolume, shouldPlay);
+        });
+    }
 }
 
 // 生态稳态模型：把传感器的加速度映射为池塘"压力"和"健康度"
@@ -377,8 +703,10 @@ let mockPhaseIndex = 0; // 当前mock状态索引
 const mockPhases = [
     { name: '静水', base: 0.6, spread: 0.8, jerk: [0.03, 0.18], duration: [5, 9] },
     { name: '微扰', base: 2.4, spread: 1.6, jerk: [0.25, 0.8], duration: [6, 10] },
-    { name: '惊扰', base: 6.5, spread: 3.2, jerk: [0.7, 2.1], duration: [3, 5.5] }
+    { name: '惊扰', base: 6.5, spread: 3.2, jerk: [0.7, 2.1], duration: [3, 5.5] },
+    { name: '死亡', base: 0, spread: 0, jerk: [0, 0], duration: [1, 1] }
 ];
+const MOCK_PHASE_NAMES = mockPhases.map(p => p.name);
 
 function createMockAccelerometerStream() {
     const listeners = [];
@@ -392,14 +720,18 @@ function createMockAccelerometerStream() {
         const magnitude = Math.max(0, currentPhase.base + (Math.random() - 0.5) * currentPhase.spread * 2);
         const jerk = randomRange(currentPhase.jerk[0], currentPhase.jerk[1]) * (Math.random() < 0.18 ? 2.4 : 1);
 
-        lastVector = {
-            x: dir.x * magnitude + randomRange(-0.6, 0.6),
-            y: dir.y * magnitude + randomRange(-0.6, 0.6),
-            z: dir.z * magnitude + randomRange(-0.6, 0.6),
-            a: jerk,
-            magnitude,
-            phase: currentPhase.name
-        };
+        if (currentPhase.name === '死亡') {
+            lastVector = { x: 0, y: 0, z: 0, a: 0, magnitude: 0, phase: '死亡' };
+        } else {
+            lastVector = {
+                x: dir.x * magnitude + randomRange(-0.6, 0.6),
+                y: dir.y * magnitude + randomRange(-0.6, 0.6),
+                z: dir.z * magnitude + randomRange(-0.6, 0.6),
+                a: jerk,
+                magnitude,
+                phase: currentPhase.name
+            };
+        }
 
         listeners.forEach(cb => cb(lastVector));
     };
@@ -418,6 +750,25 @@ function createMockAccelerometerStream() {
                 mockPhaseIndex = index;
                 currentPhase = { ...mockPhases[mockPhaseIndex], remaining: Infinity };
                 lastVector.phase = currentPhase.name;
+                if (currentPhase.name === '死亡' && homeostasis) {
+                    homeostasis.isPermanentlyDead = true;
+                    homeostasis.health = 0;
+                    homeostasis.capacity = 0;
+                    homeostasis.panicTime = 999;
+                    homeostasis.sensor.phase = '死亡';
+                    deathAudioFaded = false;
+                    deathAudioFading = false;
+                    startDeathFade();
+                }
+                if (currentPhase.name !== '死亡' && homeostasis) {
+                    homeostasis.isPermanentlyDead = false;
+                    homeostasis.health = 1;
+                    homeostasis.capacity = 1;
+                    homeostasis.panicTime = 0;
+                    homeostasis.sensor.phase = currentPhase.name;
+                    deathAudioFaded = false;
+                    deathAudioFading = false;
+                }
                 // 立即通知一次
                 listeners.forEach(cb => cb(lastVector));
             }
@@ -561,6 +912,39 @@ function createAccelerometerStream() {
         console.log('🎲 使用模拟传感器数据 (Mock)');
         return createMockAccelerometerStream();
     }
+}
+
+function setupMockPhaseButton() {
+    const btn = document.getElementById('mockPhaseButton');
+    const statusDiv = document.getElementById('sensor-status');
+    if (!btn) return;
+    if (USE_REAL_SENSOR) {
+        btn.style.display = 'none';
+        return;
+    }
+    
+    const updateUI = (index) => {
+        const name = MOCK_PHASE_NAMES[index] || '未知';
+        btn.textContent = `切换模拟状态（当前：${name}）`;
+        if (statusDiv) {
+            statusDiv.textContent = `🟠 模拟传感器：${name}`;
+            statusDiv.style.color = '#ffaa00';
+        }
+    };
+    
+    let currentIndex = sensorStream?.getCurrentPhase ? sensorStream.getCurrentPhase() : 0;
+    updateUI(currentIndex);
+    
+    btn.addEventListener('click', () => {
+        currentIndex = (currentIndex + 1) % MOCK_PHASE_NAMES.length;
+        if (sensorStream && sensorStream.setPhase) {
+            sensorStream.setPhase(currentIndex);
+        }
+        updateUI(currentIndex);
+        if (musicController) {
+            musicController.sync();
+        }
+    });
 }
 
 // 立即创建一个稳态模型，等 bootstrap 后绑定模拟数据流
@@ -1106,6 +1490,15 @@ function bootstrap() {
     setupDebugControls();
     setupEcosystemPanel();
     
+    if (!musicController) {
+        musicController = new MusicController(MUSIC_TRACKS);
+        musicController.setState('calm');
+        musicController.sync(); // 若已解锁则立即播放静水
+    }
+    if (!ambientController) {
+        ambientController = new AmbientController(AMBIENT_TRACKS);
+    }
+    
     if (!sensorStream) {
         sensorStream = createAccelerometerStream();  // 使用工厂函数，根据配置选择真实/模拟数据
         sensorStream.onData((vector) => {
@@ -1113,6 +1506,7 @@ function bootstrap() {
         });
         homeostasis.receiveSensor(sensorStream.getLatest());
         console.log('✅ 加速度数据流已启动');
+        setupMockPhaseButton();
     }
     
     // 加载池塘背景图片（底层）
@@ -1344,6 +1738,46 @@ function animate(currentTime) {
         updateEcosystemPanelUI(lastEcosystemSnapshot);
     }
     const ecoModifiers = getEcoModifiers(lastEcosystemSnapshot);
+    const soundState = determineSoundState(lastEcosystemSnapshot);
+    const musicState = determineMusicState(lastEcosystemSnapshot);
+    if (ambientController) {
+        const panic = lastEcosystemSnapshot?.panic || 0;
+        let stormLevel = 0;
+        let rainLevel = 1;
+        if (soundState === 'calm') {
+            rainLevel = 0; // 静水无雨声
+        } else if (soundState === 'disturbed') {
+            stormLevel = Math.min(1, Math.max(0.4, panic * 1.5)); // 惊扰才有雷声
+        } else if (soundState === 'death') {
+            rainLevel = 0;
+            stormLevel = 0;
+        } else {
+            stormLevel = 0; // 静水/微扰只有雨声
+        }
+        ambientController.update({ rainLevel, stormLevel });
+    }
+    // 四状态：静水/微扰/惊扰/死亡，死亡时总淡出
+    const isDead = !!lastEcosystemSnapshot?.isPermanentlyDead;
+    const ambientTarget = isDead ? 0 : 1;
+    const musicTarget = isDead ? 0 : (soundState === 'calm' || soundState === 'micro' ? 1 : 0); // 静水/微扰播放 calm 音轨
+    if (Math.abs(ambientTarget - ambientMasterVolume) > 0.01) {
+        ambientMasterVolume = ambientTarget;
+        if (ambientController) {
+            ambientController.setMasterVolume(ambientMasterVolume);
+        }
+    }
+    if (musicController) {
+        if (!isDead) {
+            musicController.setState('calm');
+            musicController.setMasterVolume(musicTarget);
+        }
+    }
+    if (isDead) {
+        startDeathFade();
+    } else {
+        deathAudioFaded = false;
+        deathAudioFading = false;
+    }
     
     // ===== 2. 更新所有鱼 =====
     for (let fish of fishes) {
