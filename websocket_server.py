@@ -14,7 +14,7 @@ devices = []
 BLEDevice = None
 
 # 硬编码的目标设备地址 (Windows MAC Address)
-TARGET_ADDRESS = "F2:8C:C8:0C:15:DB"
+TARGET_ADDRESS = "5DB5FA1C-1769-3437-97C2-516AE169E43C"
 
 # 当前传感器数据
 current_sensor_data = {
@@ -26,30 +26,31 @@ current_sensor_data = {
 }
 
 # 扫描并连接指定设备
+# ================= 替换开始 =================
+# 扫描并连接指定设备 (修改版：优先匹配名字)
 async def connect_device():
     global devices, BLEDevice
     
-    print(f"正在搜索指定设备: {TARGET_ADDRESS} (WT901BLE67)...")
+    # 设定我们要找的名字关键词
+    TARGET_NAME_KEYWORD = "WT901" 
+    
+    print(f"正在搜索名称包含 '{TARGET_NAME_KEYWORD}' 的设备...")
+    
     try:
-        # 1. 尝试直接通过地址查找 (快速路径)
-        device = await bleak.BleakScanner.find_device_by_address(TARGET_ADDRESS, timeout=10.0)
-        
-        if device:
-            BLEDevice = device
-            print(f"\n⚡ 成功锁定目标设备: {device.name or 'Unknown'} ({device.address})")
-            return True
-            
-        print("⚠️ 未能直接通过地址找到设备，尝试全域扫描...")
-        
-        # 2. 备用：全域扫描
+        # 直接进行全域扫描
         devices = await bleak.BleakScanner.discover(timeout=5.0)
+        
         for d in devices:
-            if d.address == TARGET_ADDRESS:
+            # 打印出来看看，方便调试
+            # print(f"扫描到: {d.name} - {d.address}")
+            
+            # 如果设备有名字，且名字里包含 "WT901"
+            if d.name and TARGET_NAME_KEYWORD in d.name:
                 BLEDevice = d
-                print(f"\n✅ 在扫描结果中找到目标设备: {d.name} ({d.address})")
+                print(f"\n⚡ 成功锁定目标设备: {d.name} ({d.address})")
                 return True
         
-        print(f"\n❌ 未找到设备 {TARGET_ADDRESS}")
+        print(f"\n❌ 未找到名称包含 {TARGET_NAME_KEYWORD} 的设备")
         print("附近设备列表:")
         for d in devices:
             print(f"  - {d.name or '未知'}: {d.address}")
@@ -59,6 +60,7 @@ async def connect_device():
     except Exception as ex:
         print("❌ 蓝牙搜索失败:", ex)
         return False
+# ================= 替换结束 =================
 
 # 传感器数据更新回调
 def updateData(DeviceModel):
