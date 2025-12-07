@@ -867,6 +867,7 @@ function setupScaleControls() {
 
 function setupEcosystemPanel() {
     ecosystemUI.zenIndicator = document.getElementById('zen-indicator');
+    ecosystemUI.zenPointer = document.querySelector('.zen-pointer');
     
     // 旧的 UI 元素绑定（防止报错，虽然可能不再显示）
     ecosystemUI.panel = document.getElementById('eco-panel');
@@ -901,6 +902,14 @@ function updateEcosystemPanelUI(snapshot) {
             ecosystemUI.zenIndicator.classList.add('panic');
         } else if (panic > 0.15 || (sensor && sensor.phase === '微扰')) {
             ecosystemUI.zenIndicator.classList.add('disturbed');
+        }
+
+        // 更新方向指示器 (根据 sensor.AngX 或 sensor.angle)
+        if (ecosystemUI.zenPointer && sensor) {
+            const angle = sensor.angle !== undefined ? sensor.angle : (sensor.AngX || 0);
+            // 这里我们需要将传感器角度映射到视觉旋转
+            // 假设 0 度向上
+            ecosystemUI.zenPointer.style.transform = `rotate(${angle}deg)`;
         }
     }
 

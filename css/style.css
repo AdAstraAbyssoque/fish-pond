@@ -156,7 +156,8 @@ canvas {
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.2); /* Disconnected / Idle */
   box-shadow: 0 0 10px rgba(255, 255, 255, 0.1);
-  transition: all 0.8s cubic-bezier(0.25, 0.8, 0.25, 1);
+  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  z-index: 2;
 }
 
 .zen-ring {
@@ -167,6 +168,31 @@ canvas {
   border: 1px solid transparent;
   transition: all 0.5s ease;
   opacity: 0;
+  z-index: 1;
+}
+
+/* Direction Pointer */
+.zen-pointer {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  z-index: 3;
+}
+
+.zen-pointer::after {
+  content: "";
+  position: absolute;
+  top: -4px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 6px;
+  height: 6px;
+  background: #ffffff;
+  border-radius: 50%;
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.8);
 }
 
 /* Connected State (Calm) */
@@ -184,30 +210,45 @@ canvas {
   animation: zen-breathe 4s infinite ease-in-out;
 }
 
+#zen-indicator.connected .zen-pointer {
+  opacity: 0.8; /* Show pointer when connected */
+}
+
 /* Disturbed State */
 #zen-indicator.connected.disturbed .zen-core {
   background: #ffaa00; /* Orange */
   box-shadow: 0 0 25px rgba(255, 170, 0, 0.7);
-  width: 20px;
-  height: 20px;
+  width: 24px; /* Larger */
+  height: 24px;
 }
 
 #zen-indicator.connected.disturbed .zen-ring {
   border-color: rgba(255, 170, 0, 0.4);
-  animation: zen-rotate 2s linear infinite;
+  /* Stopped continuous rotation to allow manual direction */
+  animation: none;
+}
+
+#zen-indicator.connected.disturbed .zen-pointer::after {
+  background: #ffaa00;
+  box-shadow: 0 0 10px rgba(255, 170, 0, 0.8);
 }
 
 /* Panic State */
 #zen-indicator.connected.panic .zen-core {
   background: #ff3300; /* Red */
   box-shadow: 0 0 40px rgba(255, 51, 0, 0.9), 0 0 80px rgba(255, 51, 0, 0.5);
-  width: 24px;
-  height: 24px;
+  width: 32px; /* Even Larger */
+  height: 32px;
 }
 
 #zen-indicator.connected.panic .zen-ring {
   border-color: rgba(255, 51, 0, 0.6);
   animation: zen-shake 0.1s infinite;
+}
+
+#zen-indicator.connected.panic .zen-pointer::after {
+  background: #ff3300;
+  box-shadow: 0 0 12px rgba(255, 51, 0, 1);
 }
 
 @keyframes zen-breathe {
@@ -219,18 +260,6 @@ canvas {
   50% {
     transform: scale(1.15);
     opacity: 0.6;
-  }
-}
-
-@keyframes zen-rotate {
-  0% {
-    transform: rotate(0deg) scale(1);
-  }
-  50% {
-    transform: rotate(180deg) scale(0.9);
-  }
-  100% {
-    transform: rotate(360deg) scale(1);
   }
 }
 
