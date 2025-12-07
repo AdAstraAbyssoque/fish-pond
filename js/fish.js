@@ -65,6 +65,8 @@ class Fish {
 
         // 记录上一帧的完整度，用于检测消失事件
         this.lastIntegrity = 1.0;
+        this.whaleFallCenter = null;  // 供鲸落效果使用
+        this.respawnDelay = 0;        // 鲸落后延迟复活
 
         // 临时结群机制
         this.schoolingTimer = 0;       // 剩余结群时间

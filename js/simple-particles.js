@@ -94,7 +94,7 @@ class SimpleReglParticles {
         console.log('渲染命令创建完成');
     }
     
-    spawnParticle(x, y, color = null, isTail = false, tailProgress = 0, isDead = false) {
+    spawnParticle(x, y, color = null, isTail = false, tailProgress = 0, isDead = false, modeAlpha = 1) {
         if (this.particles.length >= this.maxParticles) {
             this.particles.shift(); // 移除最老的粒子
         }
@@ -103,10 +103,10 @@ class SimpleReglParticles {
         let speed, lifeMultiplier, sizeMultiplier;
         
         if (isDead) {
-            // 鲸落/散开粒子：爆发速度，迅速减速
-            speed = 15.0 + Math.random() * 20.0; 
-            lifeMultiplier = 2.5; // 存在时间较长
-            sizeMultiplier = 0.8;
+            // 鲸落/散开粒子：爆发速度，持续更久
+            speed = 12.0 + Math.random() * 14.0; 
+            lifeMultiplier = 20.0; // 大幅拉长寿命
+            sizeMultiplier = 1.1;
         } else if (isTail) {
             // 尾巴粒子：更大速度，更长生命，更大尺寸
             speed = (1.0 + tailProgress * 3.0) + Math.random() * 2.0; // 尾尖速度更大
@@ -133,7 +133,8 @@ class SimpleReglParticles {
             size: baseSize * sizeMultiplier,
             color: color || this.config.colorStart,
             isTail: isTail,
-            isDead: isDead
+            isDead: isDead,
+            modeAlpha: modeAlpha
         };
         
         // 散开粒子不需要额外的重力下沉，让它们自然散开
@@ -142,7 +143,7 @@ class SimpleReglParticles {
     }
     
     // 新增：粒子爆发（用于鲸落散开）
-    explode(points) {
+    explode(points, modeAlpha = 1) {
         if (!points || points.length === 0) return;
         
         // 对每个采样点生成 1-2 个粒子
@@ -160,13 +161,14 @@ class SimpleReglParticles {
                     point.color, 
                     false, 
                     0, 
-                    true // isDead = true，触发散开物理参数
+                    true, // isDead = true，触发散开物理参数
+                    modeAlpha
                 );
             }
         }
     }
     
-    update(deltaTime, skeletonPoints) {
+    update(deltaTime, skeletonPoints, modeAlpha = 1) {
         this.time += deltaTime;
         
         // 更新现有粒子
@@ -223,14 +225,15 @@ class SimpleReglParticles {
                         point.color, 
                         point.isTail || false, 
                         point.tailProgress || 0,
-                        point.isDead || false
+                        point.isDead || false,
+                        modeAlpha
                     );
                 }
             }
         }
     }
     
-    render(projectionMatrix) {
+    render(projectionMatrix, camera = null) {
         if (this.particles.length === 0) return;
         
         const positions = [];
@@ -239,9 +242,17 @@ class SimpleReglParticles {
         const colors = [];
         
         for (const p of this.particles) {
-            positions.push(p.x, p.y);
-            sizes.push(p.size * (p.life / p.initialLife));
-            alphas.push(p.life / p.initialLife);
+            // 将世界坐标转换到屏幕坐标（随摄像机移动）
+            const screenX = camera ? (p.x - camera.x) * camera.zoom : p.x;
+            const screenY = camera ? (p.y - camera.y) * camera.zoom : p.y;
+            positions.push(screenX, screenY);
+
+            // 粒子尺寸随缩放变化，保持在世界中的相对尺寸
+            const sizeScale = camera ? camera.zoom : 1;
+            sizes.push(p.size * (p.life / p.initialLife) * sizeScale);
+
+            const alpha = (p.life / p.initialLife) * (p.modeAlpha !== undefined ? p.modeAlpha : 1);
+            alphas.push(alpha);
             
             // 使用粒子自身的颜色，尾巴粒子增强亮度
             if (p.color && p.color.length >= 3) {
@@ -277,4 +288,3 @@ class SimpleReglParticles {
 }
 
 window.SimpleReglParticles = SimpleReglParticles;
-

@@ -1,257 +1,267 @@
 * {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
 }
 
 body {
-    background: #000000;
-    overflow: hidden;
-    height: 100vh;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background: #000000;
+  overflow: hidden;
+  height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
 }
 
 #canvas-wrapper {
-    position: relative;
+  position: relative;
 }
 
 canvas {
-    display: block;
-    cursor: crosshair;
+  display: block;
+  cursor: crosshair;
 }
 
 #particle-canvas {
-    position: absolute;
-    top: 0;
-    left: 0;
-    pointer-events: none;
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
 }
 
 #overlay-canvas {
-    position: absolute;
-    top: 0;
-    left: 0;
-    pointer-events: none;
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
 }
 
 #info {
-    position: fixed;
-    top: 20px;
-    left: 20px;
-    color: rgba(160, 190, 230, 0.6);
-    font-size: 14px;
-    pointer-events: none;
-    text-shadow: 0 2px 8px rgba(100, 150, 200, 0.3);
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  color: rgba(160, 190, 230, 0.6);
+  font-size: 14px;
+  pointer-events: none;
+  text-shadow: 0 2px 8px rgba(100, 150, 200, 0.3);
 }
 
 #info p {
-    margin: 5px 0;
+  margin: 5px 0;
 }
 
 #controls {
-    position: fixed;
-    top: 20px;
-    right: 20px;
-    width: 220px;
-    padding: 16px 18px;
-    border-radius: 18px;
-    background: rgba(21, 26, 33, 0.78);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    color: rgba(255, 255, 255, 0.85);
-    font-size: 13px;
-    backdrop-filter: blur(14px);
-    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
-    pointer-events: auto;
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  width: 220px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  background: rgba(21, 26, 33, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 13px;
+  backdrop-filter: blur(14px);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
 }
 
 #controls .control-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
 }
 
 #controls label {
-    font-size: 11px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.72);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.72);
 }
 
 #scaleValue {
-    font-size: 14px;
-    font-weight: 600;
-    color: #ffb07a;
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffb07a;
 }
 
 #controls input[type="range"] {
-    width: 100%;
-    cursor: pointer;
-    accent-color: #ff9966;
+  width: 100%;
+  cursor: pointer;
+  accent-color: #ff9966;
 }
 
 #controls .control-actions {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
-    margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
 }
 
 #controls .control-actions button {
-    margin-top: 0;
-    font-size: 11px;
-    letter-spacing: 0.06em;
-    padding: 7px 0;
+  margin-top: 0;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  padding: 7px 0;
 }
 
 #controls button {
-    margin-top: 12px;
-    width: 100%;
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.08);
-    color: #ffffff;
-    font-size: 12px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    padding: 8px 0;
-    cursor: pointer;
-    transition: background 0.2s ease, border-color 0.2s ease;
+  margin-top: 12px;
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 8px 0;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
 }
 
 #controls button:hover {
-    background: rgba(255, 153, 102, 0.25);
-    border-color: rgba(255, 153, 102, 0.6);
+  background: rgba(255, 153, 102, 0.25);
+  border-color: rgba(255, 153, 102, 0.6);
 }
 
+/* Old Eco Panel - kept for reference or legacy support but replaced in DOM */
 #eco-panel {
-    position: fixed;
-    left: 20px;
-    bottom: 20px;
-    width: 320px;
-    max-width: calc(100% - 40px);
-    padding: 14px 16px;
-    border-radius: 18px;
-    background: rgba(14, 20, 30, 0.82);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    color: rgba(255, 255, 255, 0.88);
-    backdrop-filter: blur(12px);
-    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
-    pointer-events: none;
+  display: none;
 }
 
-#eco-panel .eco-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 6px;
+/* New Minimalist Artistic Sensor Indicator */
+#zen-panel {
+  position: fixed;
+  left: 40px;
+  bottom: 40px;
+  pointer-events: none;
+  z-index: 200;
 }
 
-#eco-panel .eco-label {
-    font-size: 11px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.65);
+#zen-indicator {
+  position: relative;
+  width: 60px;
+  height: 60px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
 }
 
-#eco-panel .eco-phase {
-    font-size: 18px;
-    font-weight: 700;
-    color: #7cd6ff;
-    margin-top: 2px;
+.zen-core {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.2); /* Disconnected / Idle */
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.1);
+  transition: all 0.8s cubic-bezier(0.25, 0.8, 0.25, 1);
 }
 
-#eco-panel .eco-badge {
-    padding: 6px 10px;
-    border-radius: 999px;
-    border: 1px solid rgba(124, 214, 255, 0.45);
-    background: rgba(124, 214, 255, 0.12);
-    color: #9ce0ff;
-    font-size: 12px;
-    white-space: nowrap;
+.zen-ring {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  border: 1px solid transparent;
+  transition: all 0.5s ease;
+  opacity: 0;
 }
 
-#eco-panel .eco-badge.warn {
-    border-color: rgba(255, 153, 102, 0.6);
-    background: rgba(255, 153, 102, 0.16);
-    color: #ffb199;
+/* Connected State (Calm) */
+#zen-indicator.connected .zen-core {
+  background: #7cd6ff; /* Cyan */
+  box-shadow: 0 0 20px rgba(124, 214, 255, 0.6),
+    0 0 40px rgba(124, 214, 255, 0.3);
+  width: 16px;
+  height: 16px;
 }
 
-#eco-panel .eco-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 8px;
-    font-size: 12px;
-    color: rgba(255, 255, 255, 0.78);
+#zen-indicator.connected .zen-ring {
+  border-color: rgba(124, 214, 255, 0.3);
+  opacity: 1;
+  animation: zen-breathe 4s infinite ease-in-out;
 }
 
-#eco-panel .eco-row-label {
-    color: rgba(255, 255, 255, 0.65);
+/* Disturbed State */
+#zen-indicator.connected.disturbed .zen-core {
+  background: #ffaa00; /* Orange */
+  box-shadow: 0 0 25px rgba(255, 170, 0, 0.7);
+  width: 20px;
+  height: 20px;
 }
 
-#eco-panel .eco-row-value {
-    font-family: 'SFMono-Regular', 'Menlo', 'Consolas', 'Liberation Mono', monospace;
-    font-size: 12px;
-    color: #ffffff;
+#zen-indicator.connected.disturbed .zen-ring {
+  border-color: rgba(255, 170, 0, 0.4);
+  animation: zen-rotate 2s linear infinite;
 }
 
-#eco-panel .eco-bar-row {
-    display: grid;
-    grid-template-columns: 60px 1fr 50px;
-    align-items: center;
-    gap: 8px;
-    margin-top: 6px;
+/* Panic State */
+#zen-indicator.connected.panic .zen-core {
+  background: #ff3300; /* Red */
+  box-shadow: 0 0 40px rgba(255, 51, 0, 0.9), 0 0 80px rgba(255, 51, 0, 0.5);
+  width: 24px;
+  height: 24px;
 }
 
-#eco-panel .eco-bar {
-    position: relative;
-    width: 100%;
-    height: 8px;
-    background: rgba(255, 255, 255, 0.08);
-    border-radius: 999px;
-    overflow: hidden;
+#zen-indicator.connected.panic .zen-ring {
+  border-color: rgba(255, 51, 0, 0.6);
+  animation: zen-shake 0.1s infinite;
 }
 
-#eco-panel .eco-bar-fill {
-    position: absolute;
-    inset: 0;
-    width: 0%;
-    background: linear-gradient(90deg, #7cd6ff, #ff9f7a);
-    border-radius: 999px;
-    transition: width 0.18s ease;
+@keyframes zen-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.3;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 0.6;
+  }
 }
 
-#eco-panel .eco-bar-value {
-    font-size: 12px;
-    color: rgba(255, 255, 255, 0.75);
-    text-align: right;
+@keyframes zen-rotate {
+  0% {
+    transform: rotate(0deg) scale(1);
+  }
+  50% {
+    transform: rotate(180deg) scale(0.9);
+  }
+  100% {
+    transform: rotate(360deg) scale(1);
+  }
 }
 
-#eco-panel .eco-note {
-    margin-top: 10px;
-    font-size: 11px;
-    color: rgba(255, 255, 255, 0.72);
-    line-height: 1.5;
+@keyframes zen-shake {
+  0% {
+    transform: translate(1px, 1px);
+  }
+  25% {
+    transform: translate(-1px, 1px);
+  }
+  50% {
+    transform: translate(-1px, -1px);
+  }
+  75% {
+    transform: translate(1px, -1px);
+  }
+  100% {
+    transform: translate(1px, 1px);
+  }
 }
 
 @media (max-width: 640px) {
-    #controls {
-        width: calc(100% - 40px);
-        left: 20px;
-        right: 20px;
-        top: auto;
-        bottom: 20px;
-    }
-    
-    #eco-panel {
-        left: 20px;
-        right: 20px;
-        width: calc(100% - 40px);
-        bottom: calc(20px + 240px);
-    }
+  #controls {
+    width: calc(100% - 40px);
+    left: 20px;
+    right: 20px;
+    top: auto;
+    bottom: 20px;
+  }
+
+  #zen-panel {
+    bottom: calc(40px + 240px); /* Move up to avoid controls on mobile */
+  }
 }

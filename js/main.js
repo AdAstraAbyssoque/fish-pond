@@ -584,7 +584,19 @@ function createRealAccelerometerStream() {
 
     // 更新连接状态显示
     const updateConnectionStatus = () => {
+        const zenIndicator = document.getElementById('zen-indicator');
         const statusDiv = document.getElementById('sensor-status');
+        
+        // 更新艺术化指示器
+        if (zenIndicator) {
+            if (isConnected1 && isConnected2) {
+                zenIndicator.classList.add('connected');
+            } else {
+                zenIndicator.classList.remove('connected');
+            }
+        }
+
+        // 保持原有逻辑作为后备（虽然现在隐藏了）
         if (statusDiv && USE_REAL_SENSOR) {
             if (isConnected1 && isConnected2) {
                 statusDiv.textContent = '🟢 双设备已连接';
@@ -854,6 +866,9 @@ function setupScaleControls() {
 }
 
 function setupEcosystemPanel() {
+    ecosystemUI.zenIndicator = document.getElementById('zen-indicator');
+    
+    // 旧的 UI 元素绑定（防止报错，虽然可能不再显示）
     ecosystemUI.panel = document.getElementById('eco-panel');
     ecosystemUI.vector = document.getElementById('sensorVector');
     ecosystemUI.phase = document.getElementById('sensorPhase');
@@ -868,11 +883,31 @@ function setupEcosystemPanel() {
 }
 
 function updateEcosystemPanelUI(snapshot) {
-    if (!snapshot || !ecosystemUI.panel) {
+    if (!snapshot) {
         return;
     }
     
     const { sensor, panic, stability, health, capacity, irreversible, panicTime, isPermanentlyDead } = snapshot;
+
+    // 更新艺术化指示器
+    if (ecosystemUI.zenIndicator) {
+        // 清除旧的状态类
+        ecosystemUI.zenIndicator.classList.remove('disturbed', 'panic');
+        
+        // 只有连接状态下（有 connected 类）才显示状态变化
+        // 注意：connected 类由 updateConnectionStatus 控制，这里只控制 panic/disturbed
+        
+        if (panic > 0.5 || (sensor && sensor.phase === '惊扰')) {
+            ecosystemUI.zenIndicator.classList.add('panic');
+        } else if (panic > 0.15 || (sensor && sensor.phase === '微扰')) {
+            ecosystemUI.zenIndicator.classList.add('disturbed');
+        }
+    }
+
+    // 以下是旧的 UI 更新逻辑，保留以兼容可能的调试需求
+    if (ecosystemUI.panel) {
+        // ... (原有的更新逻辑)
+
     const formatPercent = (value) => `${Math.round(clamp01(value) * 100)}%`;
 
     if (ecosystemUI.vector) {
@@ -991,6 +1026,7 @@ function updateEcosystemPanelUI(snapshot) {
             ecosystemUI.note.style.color = '';
             ecosystemUI.note.style.fontWeight = 'normal';
         }
+    }
     }
 }
 
@@ -1892,15 +1928,17 @@ function animate(currentTime) {
         overlayCtx.restore();
     }
     
-    // ===== 8. 屏幕空间 UI =====
+    // ===== 8. 屏幕空间 UI (已隐藏) =====
+    /*
     if (USE_REAL_SENSOR) {
-    ctx.save();
-    ctx.fillStyle = 'rgba(100, 200, 255, 0.6)';
-    ctx.font = '14px monospace';
-    const infoText = `玩家: (${Math.floor(playerFish?.spine.joints[0].x || 0)}, ${Math.floor(playerFish?.spine.joints[0].y || 0)}) | 视野: ${visibleFishes.length}/${fishes.length} 鱼 | Zoom: ${camera.zoom.toFixed(2)}x`;
-    ctx.fillText(infoText, 10, canvas.height - 20);
-    ctx.restore();
+        ctx.save();
+        ctx.fillStyle = 'rgba(100, 200, 255, 0.6)';
+        ctx.font = '14px monospace';
+        const infoText = `玩家: (${Math.floor(playerFish?.spine.joints[0].x || 0)}, ${Math.floor(playerFish?.spine.joints[0].y || 0)}) | 视野: ${visibleFishes.length}/${fishes.length} 鱼 | Zoom: ${camera.zoom.toFixed(2)}x`;
+        ctx.fillText(infoText, 10, canvas.height - 20);
+        ctx.restore();
     }
+    */
 
     requestAnimationFrame(animate);
 }
