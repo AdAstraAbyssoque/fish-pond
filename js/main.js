@@ -115,11 +115,23 @@ const SCALE_RANGE = { min: 0.05, max: 1.2, default: 0.6 };  // 更大的鱼（60
 
 // 粒子与生态模型的基础参数
 const BASE_PARTICLE_SPAWN_RATE = 28000;
+const WHALE_LINGER_TIME = 4.0;   // 鲸落亮度保持时间
+const WHALE_FADE_TIME = 10.0;    // 鲸落淡出时间
+const WHALE_RESPAWN_DELAY = 4.5; // 鲸落后重新出现的等待时间
+const PANIC_COOLDOWN_BASE = 0.55; // 惊扰计时回落的基础速度
+const COLLAPSE_RECOVERY_RATE = 0.08; // 崩塌后缓慢回升承载力
+const COLLAPSE_DAMAGE_REDUCTION = 0.6; // 崩塌状态下减少伤害系数
 
 // 生态稳态/传感器状态
 let homeostasis = null;
 let sensorStream = null;
 let lastEcosystemSnapshot = null;
+
+// 视觉模式缓冲：实体鱼与粒子鱼的平滑切换
+let calmBlend = 1;   // 1=完全实体渲染，0=完全粒子
+let calmState = true;
+const CALM_ENTER_PANIC = 0.08; // 低于该值逐步进入静水渲染
+const CALM_EXIT_PANIC = 0.14;  // 高于该值逐步退出静水渲染
 
 function clampScale(value) {
     return Math.min(SCALE_RANGE.max, Math.max(SCALE_RANGE.min, value));
@@ -264,7 +276,7 @@ class PondHomeostasis {
             this.panicTime += deltaTime;
             
             // 惊扰超过15秒 → 永久死亡
-            if (this.panicTime >= 15) {
+            if (this.panicTime >= 5) {
                 this.isPermanentlyDead = true;
                 this.health = 0;
                 this.capacity = 0;
@@ -273,9 +285,10 @@ class PondHomeostasis {
             // 注意：这里不再粗暴地直接降低全局 health，改为在 getFishIntegrity 中计算个体可见度
             // 只有当动荡极度持久时，才缓慢通过 collapseDebt 影响全局 capacity
         } else {
-            // 不在惊扰状态时，缓慢恢复计时器，模拟鱼群慢慢游回来的过程（约20秒恢复）
-            // 恢复速度取决于当前的环境平稳度，如果很平稳，恢复得稍微快一点点
-            const recoverySpeed = 0.35 * (1 - this.panic); 
+            // 不在惊扰状态时，加速 panicTime 回落，避免长时间残影
+            // 平静、健康越高，回落越快
+            const stabilityBoost = this.stability * 0.6 + this.health * 0.3;
+            const recoverySpeed = (PANIC_COOLDOWN_BASE + stabilityBoost) * (1 - this.panic * 0.6);
             this.panicTime = Math.max(0, this.panicTime - deltaTime * recoverySpeed);
         }
 
@@ -284,16 +297,25 @@ class PondHomeostasis {
         this.stability = damp(this.stability, stabilityTarget, 2.5, deltaTime);  // 中等恢复速度
 
         // 恢复与伤害，结合稳态与动荡
-        const damage = (0.1 + this.collapseDebt * 0.4) * Math.pow(this.panic, 1.5);
+        const collapsePenalty = this.capacity < 0.99 ? COLLAPSE_DAMAGE_REDUCTION : 1;
+        const damage = (0.1 + this.collapseDebt * 0.4) * Math.pow(this.panic, 1.5) * collapsePenalty;
+        const recoveryBoost = (this.capacity < 0.99 && this.panic < 0.25) ? 1.35 : 1;
         const recovery = Math.max(0, this.stability - this.health) *
             (0.5 * this.capacity) * 
-            (1 - this.panic * 0.8);
+            (1 - this.panic * 0.8) *
+            recoveryBoost;
         this.health = clamp01(this.health + (recovery - damage) * deltaTime);
 
         // 低于阈值后触发承载力衰减（降低阈值，减缓衰减速度）
         if (this.health < 0.1) {
             this.collapseDebt = clamp01(this.collapseDebt + (0.05 + this.panic * 0.2) * deltaTime);  // 减缓衰减
             this.capacity = Math.max(0.5, 1 - this.collapseDebt);  // 提高最低承载力
+        }
+
+        // 崩塌后，如果环境恢复平稳，允许缓慢回升承载力，避免“锁死”后持续衰减
+        if (this.capacity < 0.99 && this.panic < 0.2 && this.stability > 0.6) {
+            this.collapseDebt = Math.max(0, this.collapseDebt - COLLAPSE_RECOVERY_RATE * deltaTime * (this.stability + 0.5));
+            this.capacity = Math.max(0.5, 1 - this.collapseDebt);
         }
 
         const fishIntegrity = clamp01(this.health * this.capacity); // 这里只计算基础值，具体每条鱼在 getFishIntegrity 中算
@@ -368,9 +390,10 @@ class PondHomeostasis {
 
 // ============= 加速度数据流 =============
 
-// 配置：连接到真实传感器后端（BWT901BLE5.0）
-const USE_REAL_SENSOR = false;  // true=真实传感器后端, false=模拟数据
-const WEBSOCKET_URL = 'ws://localhost:8765';  // Python WebSocket 服务器地址
+// 配置：连接到真实传感器后端（WT901BLE67 双设备）
+const USE_REAL_SENSOR = true;  // true=真实传感器后端, false=模拟数据
+const WEBSOCKET_URL_DIRECTION = 'ws://localhost:8765';  // 设备1：方向控制（角度数据）
+const WEBSOCKET_URL_ACCELERATION = 'ws://localhost:8766';  // 设备2：加速度检测（运动状态）
 
 // 模拟一个"Python 后端"源源推送四维加速度（x, y, z, a）
 let mockPhaseIndex = 0; // 当前mock状态索引
@@ -431,103 +454,156 @@ function createMockAccelerometerStream() {
     };
 }
 
-// 真实传感器数据流（通过 WebSocket 连接 Python 后端）
+// 真实传感器数据流（通过双 WebSocket 连接 Python 后端）
 function createRealAccelerometerStream() {
     const listeners = [];
-    let lastVector = { x: 0, y: 0, z: 0, a: 0, magnitude: 0, phase: '静水' };
-    let ws = null;
-    let reconnectTimer = null;
-    let isConnected = false;
+    let lastVector = { x: 0, y: 0, z: 0, a: 0, magnitude: 0, phase: '静水', AngX: 0, AngY: 0, AngZ: 0 };
+    let wsDirection = null;  // 设备1：方向控制
+    let wsAcceleration = null;  // 设备2：加速度检测
+    let reconnectTimer1 = null;
+    let reconnectTimer2 = null;
+    let isConnected1 = false;  // 方向设备连接状态
+    let isConnected2 = false;  // 加速度设备连接状态
 
-    const connect = () => {
-        console.log(`正在连接传感器服务器: ${WEBSOCKET_URL}`);
+    // 连接方向控制设备（设备1）
+    const connectDirection = () => {
+        console.log(`正在连接方向控制设备: ${WEBSOCKET_URL_DIRECTION}`);
         
         try {
-            ws = new WebSocket(WEBSOCKET_URL);
+            wsDirection = new WebSocket(WEBSOCKET_URL_DIRECTION);
             
-            ws.onopen = () => {
-                console.log('✅ 传感器已连接');
-                isConnected = true;
+            wsDirection.onopen = () => {
+                console.log('✅ 方向控制设备已连接 (设备1)');
+                isConnected1 = true;
+                updateConnectionStatus();
+            };
+            
+            wsDirection.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    
+                    // 更新角度数据（保留加速度数据）
+                    lastVector.AngX = data.AngX || data.angle || 0;
+                    lastVector.AngY = data.AngY || 0;
+                    lastVector.AngZ = data.AngZ || 0;
+                    
+                    // 通知所有监听器
+                    listeners.forEach(cb => cb(lastVector));
+                    
+                } catch (error) {
+                    console.error('解析方向数据失败:', error);
+                }
+            };
+            
+            wsDirection.onerror = (error) => {
+                console.error('❌ 方向设备 WebSocket 错误:', error);
+                isConnected1 = false;
+            };
+            
+            wsDirection.onclose = () => {
+                console.log('🔴 方向设备连接已断开');
+                isConnected1 = false;
+                updateConnectionStatus();
                 
-                // 重置稳态模型的启动保护，防止刚连接时的突发数据导致动荡
+                // 5秒后尝试重连
+                reconnectTimer1 = setTimeout(() => {
+                    console.log('尝试重新连接方向设备...');
+                    connectDirection();
+                }, 5000);
+            };
+            
+        } catch (error) {
+            console.error('创建方向设备 WebSocket 连接失败:', error);
+            reconnectTimer1 = setTimeout(connectDirection, 5000);
+        }
+    };
+
+    // 连接加速度检测设备（设备2）
+    const connectAcceleration = () => {
+        console.log(`正在连接加速度检测设备: ${WEBSOCKET_URL_ACCELERATION}`);
+        
+        try {
+            wsAcceleration = new WebSocket(WEBSOCKET_URL_ACCELERATION);
+            
+            wsAcceleration.onopen = () => {
+                console.log('✅ 加速度检测设备已连接 (设备2)');
+                isConnected2 = true;
+                updateConnectionStatus();
+                
+                // 重置稳态模型的启动保护
                 if (homeostasis) {
                     homeostasis.bootProtectionTime = 3.0;
                     homeostasis.panic = 0;
                     homeostasis.sensor.phase = '静水';
                     console.log('🛡️ 传感器连接，启动动荡保护 (3s)');
                 }
-                
-                // 显示连接状态
-                const statusDiv = document.getElementById('sensor-status');
-                if (statusDiv) {
-                    // 只在真实连接下显示
-                    if (USE_REAL_SENSOR) {
-                        statusDiv.textContent = '🟢 传感器已连接';
-                        statusDiv.style.color = '#00ff00';
-                    } else {
-                        statusDiv.style.display = 'none';
-                    }
-                }
             };
             
-            ws.onmessage = (event) => {
+            wsAcceleration.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
                     
-                    // 将传感器数据映射到我们的格式
-                    lastVector = {
-                        x: data.x || 0,
-                        y: data.y || 0,
-                        z: data.z || 0,
-                        a: data.a || 0,
-                        magnitude: data.magnitude || 0,
-                        phase: data.phase || '静水',
-                        // 保留额外的传感器数据
-                        AngX: data.AngX,
-                        AngY: data.AngY,
-                        AngZ: data.AngZ
-                    };
+                    // 更新加速度数据（保留角度数据）
+                    lastVector.x = data.x || 0;
+                    lastVector.y = data.y || 0;
+                    lastVector.z = data.z || 0;
+                    lastVector.a = data.a || 0;
+                    lastVector.magnitude = data.magnitude || 0;
+                    lastVector.phase = data.phase || '静水';
                     
                     // 通知所有监听器
                     listeners.forEach(cb => cb(lastVector));
                     
                 } catch (error) {
-                    console.error('解析传感器数据失败:', error);
+                    console.error('解析加速度数据失败:', error);
                 }
             };
             
-            ws.onerror = (error) => {
-                console.error('❌ WebSocket 错误:', error);
-                isConnected = false;
+            wsAcceleration.onerror = (error) => {
+                console.error('❌ 加速度设备 WebSocket 错误:', error);
+                isConnected2 = false;
             };
             
-            ws.onclose = () => {
-                console.log('🔴 传感器连接已断开');
-                isConnected = false;
-                
-                const statusDiv = document.getElementById('sensor-status');
-                if (statusDiv) {
-                    statusDiv.textContent = '🔴 传感器已断开，尝试重连...';
-                    statusDiv.style.color = '#ff9900';
-                }
+            wsAcceleration.onclose = () => {
+                console.log('🔴 加速度设备连接已断开');
+                isConnected2 = false;
+                updateConnectionStatus();
                 
                 // 5秒后尝试重连
-                reconnectTimer = setTimeout(() => {
-                    console.log('尝试重新连接传感器...');
-                    connect();
+                reconnectTimer2 = setTimeout(() => {
+                    console.log('尝试重新连接加速度设备...');
+                    connectAcceleration();
                 }, 5000);
             };
             
         } catch (error) {
-            console.error('创建 WebSocket 连接失败:', error);
-            
-            // 5秒后尝试重连
-            reconnectTimer = setTimeout(connect, 5000);
+            console.error('创建加速度设备 WebSocket 连接失败:', error);
+            reconnectTimer2 = setTimeout(connectAcceleration, 5000);
+        }
+    };
+
+    // 更新连接状态显示
+    const updateConnectionStatus = () => {
+        const statusDiv = document.getElementById('sensor-status');
+        if (statusDiv && USE_REAL_SENSOR) {
+            if (isConnected1 && isConnected2) {
+                statusDiv.textContent = '🟢 双设备已连接';
+                statusDiv.style.color = '#00ff00';
+            } else if (isConnected1 || isConnected2) {
+                const connected = isConnected1 ? '方向' : '加速度';
+                const disconnected = !isConnected1 ? '方向' : '加速度';
+                statusDiv.textContent = `🟡 ${connected}设备已连接，${disconnected}设备重连中...`;
+                statusDiv.style.color = '#ffaa00';
+            } else {
+                statusDiv.textContent = '🔴 设备断开，尝试重连...';
+                statusDiv.style.color = '#ff9900';
+            }
         }
     };
     
-    // 立即连接
-    connect();
+    // 立即连接两个设备
+    connectDirection();
+    connectAcceleration();
     
     return {
         onData(callback) {
@@ -537,15 +613,13 @@ function createRealAccelerometerStream() {
             return lastVector;
         },
         isConnected() {
-            return isConnected;
+            return isConnected1 && isConnected2;  // 两个设备都连接才算完全连接
         },
         stop() {
-            if (reconnectTimer) {
-                clearTimeout(reconnectTimer);
-            }
-            if (ws) {
-                ws.close();
-            }
+            if (reconnectTimer1) clearTimeout(reconnectTimer1);
+            if (reconnectTimer2) clearTimeout(reconnectTimer2);
+            if (wsDirection) wsDirection.close();
+            if (wsAcceleration) wsAcceleration.close();
         }
     };
 }
@@ -553,8 +627,9 @@ function createRealAccelerometerStream() {
 // 工厂函数：根据配置创建数据流
 function createAccelerometerStream() {
     if (USE_REAL_SENSOR) {
-        console.log('🎯 使用真实传感器数据 (BWT901BLE5.0)');
-        console.log('📡 连接到:', WEBSOCKET_URL);
+        console.log('🎯 使用真实传感器数据 (WT901BLE67 双设备)');
+        console.log('📡 方向控制设备:', WEBSOCKET_URL_DIRECTION);
+        console.log('📡 加速度检测设备:', WEBSOCKET_URL_ACCELERATION);
         console.log('💡 提示：确保 Python WebSocket 服务器正在运行');
         return createRealAccelerometerStream();
     } else {
@@ -1343,12 +1418,29 @@ function animate(currentTime) {
         lastEcosystemSnapshot = homeostasis.step(deltaTime || 0.016);
         updateEcosystemPanelUI(lastEcosystemSnapshot);
     }
+    const panicLevel = lastEcosystemSnapshot?.panic ?? 0;
+    const isPhaseCalm = lastEcosystemSnapshot?.sensor?.phase === '静水';
+    if (calmState) {
+        if (!isPhaseCalm || panicLevel > CALM_EXIT_PANIC) {
+            calmState = false;
+        }
+    } else {
+        if (isPhaseCalm && panicLevel < CALM_ENTER_PANIC) {
+            calmState = true;
+        }
+    }
+    const targetCalmBlend = calmState ? 1 : 0;
+    calmBlend = damp(calmBlend, targetCalmBlend, 3.2, deltaTime || 0.016);
+    const particleBlend = 1 - calmBlend;
     const ecoModifiers = getEcoModifiers(lastEcosystemSnapshot);
     
     // ===== 2. 更新所有鱼 =====
     for (let fish of fishes) {
         // 计算个体的完整度来影响速度（濒死乏力）
         const integrity = homeostasis ? homeostasis.getFishIntegrity(fish.ecoSensitivity) : 1;
+        if (fish.respawnDelay > 0) {
+            fish.respawnDelay = Math.max(0, fish.respawnDelay - (deltaTime || 0));
+        }
         
         // Mock模式下，玩家鱼由键盘控制
         let modifiersForThisFish;
@@ -1483,8 +1575,10 @@ function animate(currentTime) {
     // }
     
     // 静水状态下渲染鱼的实体（不使用粒子）
-    const isCalmWater = homeostasis && homeostasis.sensor && homeostasis.sensor.phase === '静水';
-    if (isCalmWater) {
+    const shouldRenderEntities = calmBlend > 0.02;
+    if (shouldRenderEntities) {
+        ctx.save();
+        ctx.globalAlpha *= Math.min(1, calmBlend + 0.05); // 轻微补偿，避免刚切换时过暗
         for (let fish of visibleFishes) {
             const integrity = homeostasis ? homeostasis.getFishIntegrity(fish.ecoSensitivity) : 1;
             // 只有完整度足够高时才显示实体
@@ -1492,6 +1586,7 @@ function animate(currentTime) {
                 fish.display(ctx);
             }
         }
+        ctx.restore();
     }
     
     // Debug: 绘制世界边界
@@ -1521,12 +1616,12 @@ function animate(currentTime) {
     camera.restoreTransform(ctx);
     
     // ===== 7. 粒子系统（只处理可见的鱼，静水状态下不显示粒子） =====
-    if (particleSystem && visibleFishes.length > 0 && !isCalmWater) {
+    if (particleSystem && visibleFishes.length > 0 && particleBlend > 0.02) {
         const ecoSpawnMultiplier = homeostasis ? homeostasis.getParticleMultiplier() : 1;
         const debugSpawnScale = debugMode ? debugParticleReduction : 1;
-        particleSystem.spawnRate = BASE_PARTICLE_SPAWN_RATE * ecoSpawnMultiplier * debugSpawnScale;
         
         const allSkeletonPoints = [];
+        let hasWhaleFall = false;
         for (let fish of visibleFishes) {
             const integrity = homeostasis ? homeostasis.getFishIntegrity(fish.ecoSensitivity) : 1;
             
@@ -1559,13 +1654,18 @@ function animate(currentTime) {
                         const points = fish.sampleBodyPointsFromImage(offscreenCtx, 2);
                         
                         // 触发一次性粒子爆发
-                        particleSystem.explode(points);
+                        fish.whaleFallCenter = fish.spine.joints[0].copy();
+                        const whaleAlpha = Math.max(0.8, particleBlend); // 鲸落保持较高亮度
+                        particleSystem.explode(points, whaleAlpha);
+                        fish.respawnDelay = WHALE_RESPAWN_DELAY;
                         
                         // 保存快照用于持续渲染残留（逐渐淡出）
                         fish.deadSnapshot = points.map(p => ({
                             ...p,
                             isDead: true,
-                            fadeTime: 0 // 淡出计时器
+                            fadeTime: 0, // 淡出计时器
+                            driftAngle: Math.random() * Math.PI * 2,
+                            baseRadius: 40 + Math.random() * 50
                         }));
                         
                         // 触发涟漪
@@ -1581,15 +1681,17 @@ function animate(currentTime) {
                         p.fadeTime = (p.fadeTime || 0) + deltaTime;
                     });
                     
-                    // 过滤掉完全淡出的点（超过3秒）
-                    fish.deadSnapshot = fish.deadSnapshot.filter(p => p.fadeTime < 3.0);
+                    // 过滤掉完全淡出的点（超过 linger+fade 时间）
+                    fish.deadSnapshot = fish.deadSnapshot.filter(p => p.fadeTime < (WHALE_LINGER_TIME + WHALE_FADE_TIME));
                     
                     if (fish.deadSnapshot.length > 0) {
                         currentPoints = fish.deadSnapshot;
                         isWhaleFall = true;
+                        hasWhaleFall = true;
                     } else {
                         // 完全淡出后清除快照
                         fish.deadSnapshot = null;
+                        fish.whaleFallCenter = null;
                     }
                 }
                 
@@ -1604,11 +1706,30 @@ function animate(currentTime) {
                     continue;
                 }
             } else {
-                // 复活/正常状态：如果有快照，清除它
+                // 复活/正常状态
                 if (fish.deadSnapshot) {
-                    fish.deadSnapshot = null;
+                    if (fish.respawnDelay > 0) {
+                        // 仍处于鲸落冷却期，继续显示残留，不渲染实体
+                        fish.deadSnapshot.forEach(p => {
+                            p.fadeTime = (p.fadeTime || 0) + deltaTime;
+                        });
+                        fish.deadSnapshot = fish.deadSnapshot.filter(p => p.fadeTime < (WHALE_LINGER_TIME + WHALE_FADE_TIME));
+                        if (fish.deadSnapshot.length > 0) {
+                            currentPoints = fish.deadSnapshot;
+                            isWhaleFall = true;
+                            hasWhaleFall = true;
+                            fish.lastIntegrity = integrity;
+                            // 在冷却期内跳过正常渲染逻辑
+                            continue;
+                        } else {
+                            fish.whaleFallCenter = null;
+                        }
+                    } else {
+                        fish.deadSnapshot = null;
+                        fish.whaleFallCenter = null;
+                    }
                 }
-                
+
                 const effectiveIntegrity = fish.isPlayer ? Math.max(integrity, 0.3) : integrity;
 
             // 优化采样密度逻辑：
@@ -1644,26 +1765,36 @@ function animate(currentTime) {
                 continue;
             }
             
-            // 转换到屏幕坐标并应用效果
-            const screenPoints = currentPoints.map(p => {
-                const screenPos = camera.worldToScreen(p.x, p.y);
+            // 应用视觉效果（保持世界坐标，渲染时再换算为屏幕）
+            const worldPoints = currentPoints.map(p => {
                 let boostedColor = p.color;
+                let px = p.x;
+                let py = p.y;
                 
                 if (isWhaleFall) {
-                    // 鲸落效果：幽灵般的青灰色/苍白金色，随时间淡出
-                    if (p.color) {
-                        const gray = (p.color[0] * 0.3 + p.color[1] * 0.59 + p.color[2] * 0.11);
-                        // 根据淡出时间计算透明度（0-3秒，从0.4到0）
-                        const fadeProgress = p.fadeTime ? Math.min(1, p.fadeTime / 3.0) : 0;
-                        const alpha = 0.4 * (1 - fadeProgress);
-                        
-                        boostedColor = [
-                            gray * 0.5 + 0.2, // R
-                            gray * 0.6 + 0.3, // G (偏青)
-                            gray * 0.7 + 0.4, // B (偏蓝)
-                            alpha              // Alpha 随时间淡出
-                        ];
+                    // 鲸落效果：围绕死亡中心扩散成雾，弱化鱼的形状
+                    const center = fish.whaleFallCenter || fish.spine.joints[0];
+                    const t = p.fadeTime || 0;
+                    const baseAngle = p.driftAngle !== undefined ? p.driftAngle : Math.random() * Math.PI * 2;
+                    const spread = (p.baseRadius || 60) + t * 45;
+                    const swirl = (Math.random() - 0.5) * 0.2; // 轻微旋涡感
+                    const sink = t * 12; // 缓慢下沉
+                    px = center.x + Math.cos(baseAngle + swirl) * spread + (Math.random() - 0.5) * 9;
+                    py = center.y + Math.sin(baseAngle + swirl) * spread + sink + (Math.random() - 0.5) * 9;
+                    
+                    let alpha;
+                    if (t < WHALE_LINGER_TIME) {
+                        alpha = 0.45;
+                    } else {
+                        const fadeProgress = Math.min(1, (t - WHALE_LINGER_TIME) / WHALE_FADE_TIME);
+                        alpha = 0.45 * (1 - fadeProgress);
                     }
+                    boostedColor = [
+                        0.50 + Math.random() * 0.18,
+                        0.64 + Math.random() * 0.16,
+                        0.80 + Math.random() * 0.12,
+                        alpha
+                    ];
                 } else if (vividBoost !== 1 && p.color) {
                     boostedColor = [
                         Math.min(1, p.color[0] * vividBoost),
@@ -1674,8 +1805,8 @@ function animate(currentTime) {
                 }
                 return { 
                     ...p, 
-                    x: screenPos.x, 
-                    y: screenPos.y, 
+                    x: px, 
+                    y: py, 
                     color: boostedColor,
                     isDead: isWhaleFall
                 };
@@ -1684,11 +1815,11 @@ function animate(currentTime) {
             // Debug 模式时进一步降低粒子生成率
             if (debugMode) {
                 const reduction = Math.max(1, Math.floor(1 / debugParticleReduction));
-                for (let i = 0; i < screenPoints.length; i += reduction) {
-                    allSkeletonPoints.push(screenPoints[i]);
+                for (let i = 0; i < worldPoints.length; i += reduction) {
+                    allSkeletonPoints.push(worldPoints[i]);
                 }
             } else {
-                allSkeletonPoints.push(...screenPoints);
+                allSkeletonPoints.push(...worldPoints);
             }
         }
         
@@ -1704,7 +1835,11 @@ function animate(currentTime) {
             );
         }
         
-        particleSystem.update(deltaTime, allSkeletonPoints);
+        const spawnBlend = hasWhaleFall ? Math.max(particleBlend, 0.7) : particleBlend;
+        particleSystem.spawnRate = BASE_PARTICLE_SPAWN_RATE * ecoSpawnMultiplier * debugSpawnScale * spawnBlend;
+
+        const frameBlend = hasWhaleFall ? Math.max(particleBlend, 0.85) : particleBlend;
+        particleSystem.update(deltaTime, allSkeletonPoints, frameBlend);
         
         // 创建正交投影矩阵
         const projection = [
@@ -1715,7 +1850,7 @@ function animate(currentTime) {
         ];
         
         regl.clear({ color: [0, 0, 0, 0], depth: 1 });
-        particleSystem.render(projection);
+        particleSystem.render(projection, camera);
     }
     
     // ===== 7.5. 渲染荷叶遮罩（顶层 overlay canvas，固定在世界坐标，遮挡鱼） =====
