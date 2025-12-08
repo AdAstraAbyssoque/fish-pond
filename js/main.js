@@ -257,7 +257,7 @@ const COLLAPSE_DAMAGE_REDUCTION = 0.6; // 崩塌状态下减少伤害系数
 
 // 音乐资源（放到 assets/audio 下）
 const MUSIC_TRACKS = {
-    calm: 'assets/audio/静水.mp3'
+    calm: 'assets/audio/pond.mp3'
 };
 const AMBIENT_TRACKS = {
     rain: 'assets/audio/rain.mp3',
