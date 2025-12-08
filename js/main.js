@@ -2007,37 +2007,28 @@ function animate(currentTime) {
             fish.respawnDelay = Math.max(0, fish.respawnDelay - (deltaTime || 0));
         }
         
-        // Mock模式下，玩家鱼由键盘控制
-        let modifiersForThisFish;
-        if (fish.isPlayer && !USE_REAL_SENSOR) {
-            // 键盘控制：WASD控制方向
+        // 统一控制逻辑：同时支持 WASD 和 传感器
+        // 优先响应键盘输入，无键盘输入时响应传感器
+        let modifiersForThisFish = { ...ecoModifiers };
+
+        if (fish.isPlayer) {
+            // 检查键盘输入
             const moveVec = keyboard.getMovementVector();
             if (moveVec.x !== 0 || moveVec.y !== 0) {
-                // 计算目标角度
+                // 键盘控制：计算目标角度并覆盖传感器角度
                 const targetAngle = Math.atan2(moveVec.y, moveVec.x);
-                // 转换为角度（度）
                 let angleDeg = (targetAngle * 180 / Math.PI);
+                
                 // 归一化到-180到180
                 if (angleDeg > 180) angleDeg -= 360;
                 if (angleDeg < -180) angleDeg += 360;
                 
-                modifiersForThisFish = {
-                    ...ecoModifiers,
-                    sensorAngle: angleDeg // 使用键盘方向作为传感器角度
-                };
-            } else {
-                // 没有键盘输入时，保持当前方向
-                modifiersForThisFish = {
-                    ...ecoModifiers,
-                    sensorAngle: null // 不改变方向
-                };
-            }
-        } else if (fish.isPlayer) {
-            // 真实传感器模式：正常使用传感器角度
-            modifiersForThisFish = ecoModifiers;
+                modifiersForThisFish.sensorAngle = angleDeg;
+            } 
+            // 如果无键盘输入，则自然保持 modifiersForThisFish 中的 sensorAngle (来自传感器)
         } else {
-            // 白色鱼：不受传感器角度控制
-            modifiersForThisFish = { ...ecoModifiers, sensorAngle: null };
+            // 其他鱼：不受传感器/键盘方向控制
+            modifiersForThisFish.sensorAngle = null;
         }
             
         // 如果完整度低，强制减速（模拟濒死游不动）
