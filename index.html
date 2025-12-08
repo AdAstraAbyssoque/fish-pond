@@ -1,106 +1,93 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>锦鲤池塘</title>
-    <link rel="stylesheet" href="css/style.css" />
-  </head>
-  <body>
-    <!-- 新增：开始界面 -->
-    <div id="start-screen">
-      <div class="story-content">
-        <h1>POND</h1>
-        <h2 class="subtitle">Pulses Of Nature’s Domain</h2>
-
-        <div class="narrative">
-          <p>一方灵池，映照自然万象。</p>
-          <p class="en">
-            Through this miniature sphere, we mirror the delicate balance of the
-            world.
-          </p>
-
-          <div class="spacer"></div>
-
-          <p>执<b>小球</b>以引赤鲤，随心而动。</p>
-          <p>握<b>大球</b>以撼天地，震颤皆为风暴。</p>
-          <p class="en">
-            The Small Sphere guides the Red Koi. <br />
-            The Large Sphere shakes the very foundation of this ecosystem.
-          </p>
-
-          <div class="spacer"></div>
-
-          <p>万物皆有承载之限。过度的干涉将导致色彩褪去，生机不再。</p>
-          <p class="en">
-            Every touch sends ripples. Balance is fragile.<br />
-            Will you be a guardian of stability, or a harbinger of chaos?
-          </p>
-        </div>
-
-        <button id="start-btn">入 梦 / Immerse</button>
-      </div>
-    </div>
-
-    <!-- 新增：结局界面 -->
-    <div id="ending-screen" style="display: none; opacity: 0">
-      <div class="story-content">
-        <h1>静 寂</h1>
-        <h2 class="subtitle">The Silence</h2>
-
-        <div class="narrative">
-          <p>脉动已停，色彩褪尽。</p>
-          <p>过度的动荡打破了最后的平衡，世界归于黑白。</p>
-          <p class="en">
-            The pulses have stopped. The colors have faded into gray.
-          </p>
-          <p class="en">
-            We pushed nature beyond its limit, and it could not bounce back.<br />
-            In the pursuit of control, we are left with only void.
-          </p>
-        </div>
-
-        <button id="restart-btn" onclick="location.reload()">
-          重 塑 / Rebirth
-        </button>
-      </div>
-    </div>
-
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
     <div id="canvas-wrapper">
-      <canvas id="canvas"></canvas>
-      <canvas id="particle-canvas"></canvas>
-      <canvas id="overlay-canvas"></canvas>
+        <canvas id="canvas"></canvas>
+        <canvas id="particle-canvas"></canvas>
+        <canvas id="overlay-canvas"></canvas>
     </div>
-    <div id="info" style="display: none">
-      <!-- Removed top-left text as requested -->
-      <p id="sensor-status"></p>
+    <div id="info">
+        <p>🎮 锦鲤池塘 - 实时传感器驱动</p>
+        <p>• WASD 控制橙色锦鲤</p>
+        <p>• 摇晃传感器控制鱼群行为</p>
+        <p>• 按 V 切换 Debug 视野模式</p>
+        <p>• Debug: 鼠标滚轮缩放视野</p>
+        <p id="sensor-status" style="margin-top: 8px; font-weight: bold; color: #ffaa00;">📡 传感器初始化中...</p>
     </div>
 
     <div id="controls" aria-label="池塘缩放调节">
-      <div class="control-row">
-        <label for="pondScaleControl">鱼体尺寸</label>
-        <span id="scaleValue">60%</span>
-      </div>
-      <input
-        type="range"
-        id="pondScaleControl"
-        min="0.05"
-        max="1.2"
-        step="0.01"
-        value="0.6"
-        aria-describedby="scaleValue" />
-      <div class="control-actions">
-        <button id="scaleDown25" type="button">缩小25%</button>
-        <button id="scaleUp20" type="button">放大20%</button>
-      </div>
-      <button id="resetScale" type="button">重置默认尺寸</button>
+        <div class="control-row">
+            <label for="pondScaleControl">鱼体尺寸</label>
+            <span id="scaleValue">60%</span>
+        </div>
+        <input
+            type="range"
+            id="pondScaleControl"
+            min="0.05"
+            max="1.2"
+            step="0.01"
+            value="0.6"
+            aria-describedby="scaleValue"
+        >
+        <div class="control-actions">
+            <button id="scaleDown25" type="button">缩小25%</button>
+            <button id="scaleUp20" type="button">放大20%</button>
+        </div>
+        <button id="resetScale" type="button">重置默认尺寸</button>
     </div>
-    <div id="zen-panel">
-      <div id="zen-indicator" class="disconnected">
-        <div class="zen-ring"></div>
-        <div class="zen-pointer"></div>
-        <div class="zen-core"></div>
-      </div>
+    <div id="eco-panel" aria-live="polite" style="display: none;">
+        <div class="eco-head">
+            <div>
+                <p class="eco-label">池塘稳态</p>
+                <p id="sensorPhase" class="eco-phase">静水</p>
+            </div>
+            <span id="ecoCapacity" class="eco-badge">承载力 100%</span>
+        </div>
+        <div class="eco-row">
+            <span class="eco-row-label">🎯 传感器数据 x,y,z,a</span>
+            <span id="sensorVector" class="eco-row-value">0.00, 0.00, 0.00, 0.00</span>
+        </div>
+        <div class="eco-row" style="background: rgba(0, 200, 255, 0.1); padding: 8px; border-radius: 4px; margin-top: 8px;">
+            <span class="eco-row-label">📐 角度调试</span>
+            <div id="angleDebug" class="eco-row-value" style="font-size: 11px; line-height: 1.6;">
+                <div>传感器角度: <span id="sensorAngleDeg">-</span>°</div>
+                <div>目标方向: <span id="targetAngleDeg">-</span>°</div>
+                <div>当前方向: <span id="currentAngleDeg">-</span>°</div>
+                <div>角度差: <span id="angleDiffDeg">-</span>°</div>
+            </div>
+        </div>
+        <div class="eco-bar-row">
+            <span>动荡</span>
+            <div class="eco-bar">
+                <div id="panicBar" class="eco-bar-fill"></div>
+            </div>
+            <span id="panicValue" class="eco-bar-value">0%</span>
+        </div>
+        <div class="eco-bar-row">
+            <span>稳态</span>
+            <div class="eco-bar">
+                <div id="stabilityBar" class="eco-bar-fill"></div>
+            </div>
+            <span id="stabilityValue" class="eco-bar-value">100%</span>
+        </div>
+        <div class="eco-bar-row">
+            <span>鱼群活力</span>
+            <div class="eco-bar">
+                <div id="healthBar" class="eco-bar-fill"></div>
+            </div>
+            <span id="healthValue" class="eco-bar-value">100%</span>
+        </div>
+        <p id="ecoNote" class="eco-note">💡 摇晃传感器改变水体状态，静置后自动恢复平衡。</p>
+    </div>
+
+    <div id="status-bar" style="position: fixed; bottom: 10px; left: 10px; color: rgba(255, 255, 255, 0.7); font-family: monospace; font-size: 14px; pointer-events: none; text-shadow: 1px 1px 2px rgba(0,0,0,0.8); z-index: 100;">
+        <span id="mini-status">准备就绪 | 🐟</span>
     </div>
 
     <script src="node_modules/regl/dist/regl.min.js"></script>
@@ -113,5 +100,5 @@
     <script src="js/fish.js"></script>
     <script src="js/simple-particles.js"></script>
     <script src="js/main.js"></script>
-  </body>
+</body>
 </html>
