@@ -125,7 +125,12 @@ class AmbientController {
             audio.loop = true;
             audio.preload = 'auto';
             audio.volume = 0;
-            audio.addEventListener('error', () => console.warn(`环境音加载失败: ${src}`));
+            // 标记加载状态
+            audio._loadError = false;
+            audio.addEventListener('error', () => {
+                console.warn(`环境音加载失败: ${src}`);
+                audio._loadError = true;
+            });
             this.tracks[name] = audio;
         }
     }
@@ -189,7 +194,7 @@ class AmbientController {
     }
 
     fadeTrack(track, targetVolume, shouldPlay) {
-        if (!track) return;
+        if (!track || track._loadError) return;
         if (track._fadeFrame) {
             cancelAnimationFrame(track._fadeFrame);
             track._fadeFrame = null;
@@ -201,13 +206,23 @@ class AmbientController {
 
         if (shouldPlay && track.paused) {
             track.currentTime = 0;
-            track.play().catch(err => console.warn('环境音播放被阻止/失败:', err));
+            track.play().catch(err => {
+                // 忽略 AbortError (这是正常的)
+                if (err.name !== 'AbortError') {
+                    // console.warn('环境音播放被阻止/失败:', err);
+                }
+            });
         }
 
         const step = (now) => {
             const t = Math.min(1, (now - startTime) / durationMs);
             const eased = t * t * (3 - 2 * t);
-            track.volume = startVolume + delta * eased;
+            
+            // 确保音量在 0-1 之间
+            let newVol = startVolume + delta * eased;
+            if (!Number.isFinite(newVol)) newVol = targetVolume;
+            track.volume = Math.max(0, Math.min(1, newVol));
+
             if (t < 1) {
                 track._fadeFrame = requestAnimationFrame(step);
             } else {
@@ -246,8 +261,8 @@ const MUSIC_TRACKS = {
 };
 const AMBIENT_TRACKS = {
     rain: 'assets/audio/rain.mp3',
-    storm: 'assets/audio/storm.mp3',
-    thunder: 'assets/audio/thunder.mp3' // 兼容命名
+    // storm: 'assets/audio/storm.mp3', // 文件不存在，暂时移除
+    thunder: 'assets/audio/thunder.mp3'
 };
 
 // 生态稳态/传感器状态
@@ -463,7 +478,7 @@ class MusicController {
     }
 
     fadeTrack(track, targetVolume, shouldPlay) {
-        if (!track) return;
+        if (!track || track._loadError) return;
         // Cancel previous fade
         if (track._fadeFrame) {
             cancelAnimationFrame(track._fadeFrame);
@@ -477,14 +492,20 @@ class MusicController {
         if (shouldPlay && track.paused) {
             track.currentTime = 0;
             track.play().catch(err => {
-                console.warn('音乐播放被阻止/失败:', err);
+                 if (err.name !== 'AbortError') {
+                    // console.warn('音乐播放被阻止/失败:', err);
+                 }
             });
         }
 
         const step = (now) => {
             const t = Math.min(1, (now - startTime) / durationMs);
             const eased = t * t * (3 - 2 * t); // smoothstep easing
-            track.volume = startVolume + delta * eased;
+            
+            let newVol = startVolume + delta * eased;
+            if (!Number.isFinite(newVol)) newVol = targetVolume;
+            track.volume = Math.max(0, Math.min(1, newVol));
+
             if (t < 1) {
                 track._fadeFrame = requestAnimationFrame(step);
             } else {
