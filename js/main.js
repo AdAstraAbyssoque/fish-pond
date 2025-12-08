@@ -55,6 +55,7 @@ let playerFish = null;  // 玩家控制的鱼
 let normalZoom = 1.0; // 正常模式下的缩放（会在图片加载后更新）
 const ecosystemUI = {};
 const assetReady = { background: false, collision: false };
+let minimap = null; // 小地图实例
 
 // 创建离屏 canvas 用于图像采样（更大的尺寸）
 const offscreenCanvas = document.createElement('canvas');
@@ -103,6 +104,10 @@ function setWorldSize(width, height) {
     if (landmarks) {
         const mapSize = Math.ceil(Math.max(WORLD_WIDTH, WORLD_HEIGHT) / canvas.width);
         landmarks = new Landmarks(WORLD_WIDTH, WORLD_HEIGHT, mapSize);
+    }
+
+    if (minimap) {
+        minimap.updateDimensions(WORLD_WIDTH, WORLD_HEIGHT);
     }
 }
 
@@ -243,8 +248,9 @@ class AmbientController {
 let debugMode = false;
 let debugParticleReduction = 1.0;  // 粒子数量倍率
 
-const SCALE_STORAGE_KEY = 'pondScaleRatio';
-const SCALE_RANGE = { min: 0.05, max: 1.2, default: 0.6 };  // 更大的鱼（60%）
+const SCALE_RANGE = { min: 0.05, max: 1.2, default: 0.14 };
+// 移除动态缩放调整，固定使用默认值
+let pondScale = SCALE_RANGE.default;
 
 // 粒子与生态模型的基础参数
 const BASE_PARTICLE_SPAWN_RATE = 28000;
@@ -738,6 +744,72 @@ class PondHomeostasis {
     }
 }
 
+// ============= 小地图系统 =============
+class Minimap {
+    constructor(canvas, worldWidth, worldHeight) {
+        this.canvas = canvas;
+        this.ctx = canvas.getContext('2d');
+        this.worldWidth = worldWidth;
+        this.worldHeight = worldHeight;
+        this.fishColor = 'rgba(200, 200, 200, 0.8)';
+        this.playerColor = '#ff9966';
+        this.viewportColor = 'rgba(124, 214, 255, 0.5)';
+    }
+
+    updateDimensions(worldWidth, worldHeight) {
+        this.worldWidth = worldWidth;
+        this.worldHeight = worldHeight;
+    }
+
+    render(fishes, camera) {
+        const { width, height } = this.canvas;
+        const ctx = this.ctx;
+
+        // Clear
+        ctx.clearRect(0, 0, width, height);
+
+        // Calculate scale to fit world in minimap
+        // Keep aspect ratio centered
+        const scaleX = width / this.worldWidth;
+        const scaleY = height / this.worldHeight;
+        const scale = Math.min(scaleX, scaleY) * 0.85; // 85% fill to leave margin
+
+        const mapW = this.worldWidth * scale;
+        const mapH = this.worldHeight * scale;
+        const offsetX = (width - mapW) / 2;
+        const offsetY = (height - mapH) / 2;
+
+        // Draw Pond Boundary
+        ctx.save();
+        ctx.translate(offsetX, offsetY);
+        
+        // Background for the pond area
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
+        ctx.fillRect(0, 0, mapW, mapH);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(0, 0, mapW, mapH);
+
+        // Draw Fishes
+        fishes.forEach(fish => {
+             // Get head position
+             const head = fish.spine.joints[0];
+             const mx = head.x * scale;
+             const my = head.y * scale;
+
+             ctx.beginPath();
+             ctx.arc(mx, my, fish.isPlayer ? 3 : 1.5, 0, Math.PI * 2);
+             ctx.fillStyle = fish.isPlayer ? this.playerColor : this.fishColor;
+             ctx.fill();
+        });
+
+            // Draw Camera Viewport - REMOVED as per user request
+            // if (camera) { ... }
+
+        ctx.restore();
+    }
+}
+
 // ============= 加速度数据流 =============
 
 // 配置：连接到真实传感器后端（WT901BLE67 双设备）
@@ -1128,119 +1200,6 @@ function loadCollisionMask(imageSrc, callback) {
     };
 }
 
-function readStoredScale() {
-    try {
-        const stored = parseFloat(localStorage.getItem(SCALE_STORAGE_KEY));
-        if (!Number.isFinite(stored)) {
-            return SCALE_RANGE.default;
-        }
-        return clampScale(stored);
-    } catch (error) {
-        return SCALE_RANGE.default;
-    }
-}
-
-function persistScale(value) {
-    try {
-        localStorage.setItem(SCALE_STORAGE_KEY, value.toString());
-    } catch (error) {
-        // 忽略无痕模式等导致的写入失败
-    }
-}
-
-let pondScale = readStoredScale();
-
-let scaleSlider;
-let scaleValueLabel;
-let resetScaleBtn;
-let scaleDownBtn;
-let scaleUpBtn;
-
-function updateScaleLabel(value) {
-    if (scaleValueLabel) {
-        scaleValueLabel.textContent = `${Math.round(value * 100)}%`;
-    }
-}
-
-function syncScaleControls() {
-    if (scaleSlider) {
-        scaleSlider.value = pondScale.toFixed(2);
-    }
-    updateScaleLabel(pondScale);
-}
-
-function cacheControlElements() {
-    scaleSlider = document.getElementById('pondScaleControl');
-    scaleValueLabel = document.getElementById('scaleValue');
-    resetScaleBtn = document.getElementById('resetScale');
-    scaleDownBtn = document.getElementById('scaleDown25');
-    scaleUpBtn = document.getElementById('scaleUp20');
-}
-
-function setupScaleControls() {
-    cacheControlElements();
-
-    if (!scaleSlider) {
-        return;
-    }
-
-    syncScaleControls();
-
-    let reinitTimer = null;
-
-    const scheduleReinit = () => {
-        if (reinitTimer) {
-            clearTimeout(reinitTimer);
-        }
-        reinitTimer = setTimeout(() => {
-            persistScale(pondScale);
-            initPond();
-        }, 140);
-    };
-
-    scaleSlider.addEventListener('input', (event) => {
-        const nextValue = parseFloat(event.target.value);
-        if (Number.isFinite(nextValue)) {
-            pondScale = clampScale(nextValue);
-            updateScaleLabel(pondScale);
-            scheduleReinit();
-        }
-    });
-
-    scaleSlider.addEventListener('change', () => {
-        if (reinitTimer) {
-            clearTimeout(reinitTimer);
-            reinitTimer = null;
-        }
-        persistScale(pondScale);
-        initPond();
-    });
-
-    if (resetScaleBtn) {
-        resetScaleBtn.addEventListener('click', () => {
-            pondScale = SCALE_RANGE.default;
-            syncScaleControls();
-            persistScale(pondScale);
-            initPond();
-        });
-    }
-
-    const applyFactor = (factor) => {
-        pondScale = clampScale(pondScale * factor);
-        syncScaleControls();
-        persistScale(pondScale);
-        initPond();
-    };
-
-    if (scaleDownBtn) {
-        scaleDownBtn.addEventListener('click', () => applyFactor(0.75));
-    }
-
-    if (scaleUpBtn) {
-        scaleUpBtn.addEventListener('click', () => applyFactor(1.2));
-    }
-}
-
 function setupEcosystemPanel() {
     ecosystemUI.zenIndicator = document.getElementById('zen-indicator');
     ecosystemUI.zenPointer = document.querySelector('.zen-pointer');
@@ -1598,11 +1557,16 @@ function initPond() {
 }
 
 function bootstrap() {
-    setupScaleControls();
     setupDebugControls();
     setupEcosystemPanel();
     setupGameFlow(); // 新增：设置游戏流程
     
+    // 初始化小地图
+    const minimapCanvas = document.getElementById('minimap-canvas');
+    if (minimapCanvas) {
+        minimap = new Minimap(minimapCanvas, WORLD_WIDTH, WORLD_HEIGHT);
+    }
+
     if (!musicController) {
         musicController = new MusicController(MUSIC_TRACKS);
         musicController.setState('calm');
@@ -2125,6 +2089,11 @@ function animate(currentTime) {
     
     // ===== 4.6. 更新涟漪系统 =====
     updateRipples(deltaTime);
+
+    // ===== 4.7. 渲染小地图 =====
+    if (minimap) {
+        minimap.render(fishes, camera);
+    }
     
     // ===== 5. 渲染背景（屏幕坐标） =====
     // 先清除 canvas
@@ -2172,11 +2141,6 @@ function animate(currentTime) {
     
     // 渲染涟漪（在世界坐标中，只在池塘范围内）
     renderRipples(ctx, camera);
-    
-    // 不渲染地图参照物，保持池塘外纯黑
-    // if (landmarks) {
-    //     landmarks.render(ctx, camera, currentTime);
-    // }
     
     // 静水状态下渲染鱼的实体（不使用粒子）
     const shouldRenderEntities = calmBlend > 0.02;

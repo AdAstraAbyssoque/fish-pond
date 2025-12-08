@@ -71,30 +71,28 @@
       <canvas id="particle-canvas"></canvas>
       <canvas id="overlay-canvas"></canvas>
     </div>
+
+    <!-- 装饰性 HUD 层 -->
+    <div id="hud-overlay">
+      <div class="corner top-left"></div>
+      <div class="corner top-right"></div>
+      <div class="corner bottom-left"></div>
+      <div class="corner bottom-right"></div>
+      <div class="hud-border"></div>
+    </div>
+
+    <!-- 左上角小地图 -->
+    <div id="minimap-container">
+      <canvas id="minimap-canvas" width="200" height="200"></canvas>
+      <div class="minimap-label">ECO-SCAN</div>
+    </div>
+
     <div id="info" style="display: none">
       <!-- Removed top-left text as requested -->
       <p id="sensor-status"></p>
     </div>
 
-    <div id="controls" aria-label="池塘缩放调节">
-      <div class="control-row">
-        <label for="pondScaleControl">鱼体尺寸</label>
-        <span id="scaleValue">60%</span>
-      </div>
-      <input
-        type="range"
-        id="pondScaleControl"
-        min="0.05"
-        max="1.2"
-        step="0.01"
-        value="0.6"
-        aria-describedby="scaleValue" />
-      <div class="control-actions">
-        <button id="scaleDown25" type="button">缩小25%</button>
-        <button id="scaleUp20" type="button">放大20%</button>
-      </div>
-      <button id="resetScale" type="button">重置默认尺寸</button>
-    </div>
+    <!-- 移除旧的 controls -->
 
     <!-- 新增：艺术化状态指示器 -->
     <div id="zen-panel">
