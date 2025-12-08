@@ -626,7 +626,7 @@ class PondHomeostasis {
             this.panicTime += deltaTime;
             
             // 惊扰超过 3.5 秒 → 永久死亡 (用户反馈之前太长)
-            if (this.panicTime >= 3.5) {
+            if (this.panicTime >= 5) {
                 this.isPermanentlyDead = true;
                 this.health = 0;
                 this.capacity = 0;
@@ -648,8 +648,7 @@ class PondHomeostasis {
 
         // 恢复与伤害，结合稳态与动荡
         const collapsePenalty = this.capacity < 0.99 ? COLLAPSE_DAMAGE_REDUCTION : 1;
-        // 降低基础伤害，避免鱼在系统死亡前因健康度过低而提前消失
-        const damage = (0.04 + this.collapseDebt * 0.4) * Math.pow(this.panic, 1.5) * collapsePenalty;
+        const damage = (0.1 + this.collapseDebt * 0.4) * Math.pow(this.panic, 1.5) * collapsePenalty;
         const recoveryBoost = (this.capacity < 0.99 && this.panic < 0.25) ? 1.35 : 1;
         const recovery = Math.max(0, this.stability - this.health) *
             (0.5 * this.capacity) * 
