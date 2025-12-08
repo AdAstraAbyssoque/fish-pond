@@ -625,8 +625,8 @@ class PondHomeostasis {
         if (isInPanic) {
             this.panicTime += deltaTime;
             
-            // 惊扰超过15秒 → 永久死亡
-            if (this.panicTime >= 5) {
+            // 惊扰超过 3.5 秒 → 永久死亡 (用户反馈之前太长)
+            if (this.panicTime >= 3.5) {
                 this.isPermanentlyDead = true;
                 this.health = 0;
                 this.capacity = 0;
@@ -648,7 +648,8 @@ class PondHomeostasis {
 
         // 恢复与伤害，结合稳态与动荡
         const collapsePenalty = this.capacity < 0.99 ? COLLAPSE_DAMAGE_REDUCTION : 1;
-        const damage = (0.1 + this.collapseDebt * 0.4) * Math.pow(this.panic, 1.5) * collapsePenalty;
+        // 降低基础伤害，避免鱼在系统死亡前因健康度过低而提前消失
+        const damage = (0.04 + this.collapseDebt * 0.4) * Math.pow(this.panic, 1.5) * collapsePenalty;
         const recoveryBoost = (this.capacity < 0.99 && this.panic < 0.25) ? 1.35 : 1;
         const recovery = Math.max(0, this.stability - this.health) *
             (0.5 * this.capacity) * 
@@ -1896,6 +1897,49 @@ function drawPondBorders(ctx) {
     });
 }
 
+// 检查雨天涟漪
+function checkRainRipples(deltaTime, soundState, panicLevel) {
+    if (soundState === 'calm' || soundState === 'death') return;
+
+    // 根据状态决定生成概率 (次/秒)
+    let ripplesPerSecond = 0;
+    if (soundState === 'micro') {
+        // 微扰/小雨：少量涟漪
+        ripplesPerSecond = 8; 
+    } else if (soundState === 'disturbed') {
+        // 惊扰/暴雨：大量涟漪
+        ripplesPerSecond = 20 + panicLevel * 40; // 20-60
+    }
+    
+    // 计算当前帧应生成的期望数量
+    const expectedCount = ripplesPerSecond * deltaTime;
+    
+    // 整数部分必然生成
+    let count = Math.floor(expectedCount);
+    // 小数部分概率生成
+    if (Math.random() < (expectedCount - count)) {
+        count++;
+    }
+    
+    for (let i = 0; i < count; i++) {
+        // 随机位置
+        const x = Math.random() * WORLD_WIDTH;
+        const y = Math.random() * WORLD_HEIGHT;
+        
+        // 检查是否在水面上 (如果是岸边则不生成)
+        if (window.isPositionWalkable && !window.isPositionWalkable(x, y)) {
+            continue;
+        }
+        
+        const ripple = new Ripple(x, y);
+        // 雨滴涟漪通常较小
+        ripple.maxRadius = 30 + Math.random() * 40; // 30-70
+        ripple.speed = 90 + Math.random() * 30;     // 90-120
+        ripple.lifespan = 1.0 + Math.random() * 0.5;
+        activeRipples.push(ripple);
+    }
+}
+
 // 动画循环
 let lastTime = 0;
 
@@ -2077,6 +2121,9 @@ function animate(currentTime) {
     // ===== 4.5. 检测鱼的位置变化并触发涟漪 =====
     checkFishMovementForRipples(deltaTime);
     
+    // 检测雨天涟漪
+    checkRainRipples(deltaTime, soundState, panicLevel);
+    
     // ===== 4.6. 更新涟漪系统 =====
     updateRipples(deltaTime);
     
@@ -2174,7 +2221,7 @@ function animate(currentTime) {
     camera.restoreTransform(ctx);
     
     // ===== 7. 粒子系统（只处理可见的鱼，静水状态下不显示粒子） =====
-    if (particleSystem && visibleFishes.length > 0 && particleBlend > 0.02) {
+    if (particleSystem && visibleFishes.length > 0 && particleBlend > 0.001) {
         const ecoSpawnMultiplier = homeostasis ? homeostasis.getParticleMultiplier() : 1;
         const debugSpawnScale = debugMode ? debugParticleReduction : 1;
         
